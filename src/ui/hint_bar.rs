@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, FocusedPanel};
+use crate::app::{App, AppMode, FmOp, FocusedPanel, GitSection};
 
 /// 하단 힌트 바 렌더링 (컨텍스트별 단축키 표시)
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
@@ -51,6 +51,7 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("→/l", "뷰어/진입"),
             ("←", "상위"),
             ("Space", "뷰어"),
+            ("m", "파일관리"),
             ("b", "즐겨찾기"),
             ("/", "검색"),
             ("q", "종료"),
@@ -82,6 +83,28 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         AppMode::Help => vec![
             ("Esc/?", "닫기"),
         ],
+        AppMode::Git => {
+            let section_hint = if app.git_section == GitSection::Staged {
+                ("u", "언스테이지")
+            } else {
+                ("a", "스테이지")
+            };
+            vec![
+                ("↑↓", "이동"),
+                ("Tab", "섹션전환"),
+                section_hint,
+                ("d/Enter", "diff"),
+                ("c", "커밋"),
+                ("L", "로그"),
+                ("r", "새로고침"),
+                ("q", "닫기"),
+            ]
+        }
+        AppMode::FileManager => match app.fm_operation {
+            None => vec![("↑↓", "이동"), ("Enter", "선택"), ("Esc/q", "취소")],
+            Some(FmOp::Delete) => vec![("y", "삭제확인"), ("n/Esc", "취소")],
+            Some(_) => vec![("Enter", "확인"), ("Esc", "메뉴로"), ("Backspace", "지우기")],
+        },
     }
 }
 

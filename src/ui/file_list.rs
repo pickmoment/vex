@@ -34,10 +34,26 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
+    let git_root = app.git_status.as_ref().map(|s| &s.root);
+    let git_map = app.git_status.as_ref().map(|s| &s.file_map);
+
     let items: Vec<ListItem> = app
         .filtered_indices
         .iter()
-        .map(|&i| make_list_item(&app.file_entries[i], &app.config, &app.search_query))
+        .map(|&i| {
+            let entry = &app.file_entries[i];
+            let git_marker = if !entry.is_dir {
+                git_root.zip(git_map).and_then(|(root, map)| {
+                    entry.path.strip_prefix(root).ok()
+                        .and_then(|p| p.to_str())
+                        .and_then(|rel| map.get(rel))
+                        .copied()
+                })
+            } else {
+                None
+            };
+            make_list_item(entry, &app.config, &app.search_query, git_marker)
+        })
         .collect();
 
     let mut state = ListState::default();
@@ -68,7 +84,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 /// 파일 항목 → ListItem 변환 (검색어 매칭 부분 강조)
-fn make_list_item<'a>(entry: &'a FileEntry, config: &crate::config::Config, query: &str) -> ListItem<'a> {
+fn make_list_item<'a>(
+    entry: &'a FileEntry,
+    config: &crate::config::Config,
+    query: &str,
+    git_marker: Option<(char, char)>,
+) -> ListItem<'a> {
     let icon = if config.ui.show_icons {
         get_icon(entry)
     } else {
@@ -94,6 +115,23 @@ fn make_list_item<'a>(entry: &'a FileEntry, config: &crate::config::Config, quer
 
     let mut spans = vec![Span::raw(icon)];
     spans.extend(name_spans);
+    if let Some((x, y)) = git_marker {
+        let (marker_char, color) = if x != ' ' && x != '?' {
+            (x, Color::Green)
+        } else if y == 'M' {
+            (y, Color::Yellow)
+        } else if y == 'D' {
+            (y, Color::Red)
+        } else if x == '?' {
+            ('?', Color::DarkGray)
+        } else {
+            (' ', Color::DarkGray)
+        };
+        spans.push(Span::styled(
+            format!(" {marker_char}"),
+            Style::default().fg(color),
+        ));
+    }
     spans.push(Span::styled(
         format!("  {size_str}"),
         Style::default().fg(Color::DarkGray),

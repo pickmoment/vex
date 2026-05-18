@@ -10,6 +10,7 @@ use std::io;
 mod app;
 mod config;
 mod fs;
+mod git;
 mod preview;
 mod ui;
 

@@ -5,7 +5,7 @@ use ratatui::{
 
 use crate::app::{App, AppMode, FocusedPanel};
 use ratatui::widgets::{List, ListItem, ListState};
-use crate::ui::{file_list, hint_bar, viewer};
+use crate::ui::{file_list, file_manager as fm_ui, git as git_ui, hint_bar, viewer};
 
 /// 앱 전체 레이아웃 렌더러
 pub struct AppLayout;
@@ -16,6 +16,9 @@ impl AppLayout {
         match app.mode {
             AppMode::Viewer => {
                 viewer::render_fullscreen(f, f.area(), app);
+            }
+            AppMode::Git => {
+                git_ui::render(f, f.area(), app);
             }
             AppMode::Help => {
                 Self::render_main_panels(f, app);
@@ -28,6 +31,10 @@ impl AppLayout {
             AppMode::OpenWith => {
                 Self::render_main_panels(f, app);
                 Self::render_open_with_overlay(f, app);
+            }
+            AppMode::FileManager => {
+                Self::render_main_panels(f, app);
+                fm_ui::render(f, app);
             }
             _ => {
                 Self::render_main_panels(f, app);

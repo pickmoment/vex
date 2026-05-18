@@ -34,6 +34,26 @@ pub enum AppMode {
     CommandPalette,
     /// 도움말 오버레이
     Help,
+    /// Git 관리 모드
+    Git,
+    /// 파일 관리 오버레이 (복사/이동/삭제/이름변경)
+    FileManager,
+}
+
+/// Git 모드에서 포커스된 섹션
+#[derive(Debug, Clone, PartialEq)]
+pub enum GitSection {
+    Staged,
+    Unstaged,
+}
+
+/// 파일 관리 작업 종류
+#[derive(Debug, Clone, PartialEq)]
+pub enum FmOp {
+    Copy,
+    Move,
+    Rename,
+    Delete,
 }
 
 /// 파일 타입 분류
@@ -105,6 +125,54 @@ pub struct App {
     pub viewer_is_goto: bool,
     /// gg 감지용 직전 키
     pub viewer_prev_key: Option<KeyCode>,
+    /// git 상태 캐시
+    pub git_status: Option<crate::git::GitStatus>,
+    /// git 모드: 포커스된 섹션
+    pub git_section: GitSection,
+    /// git 모드: 스테이징 영역 선택 인덱스
+    pub git_staged_idx: usize,
+    /// git 모드: 워킹 트리 선택 인덱스
+    pub git_unstaged_idx: usize,
+    /// git 모드: 현재 표시 중인 diff 내용
+    pub git_diff: Vec<String>,
+    /// git 모드: diff 스크롤 오프셋
+    pub git_diff_scroll: u16,
+    /// git 모드: 커밋 메시지 입력 중 여부
+    pub git_is_committing: bool,
+    /// git 모드: 커밋 메시지 입력 버퍼
+    pub git_commit_input: String,
+    /// git 모드: 로그 패널 표시 여부
+    pub git_show_log: bool,
+    /// git 모드: 커밋 로그 목록
+    pub git_log: Vec<String>,
+    /// git 모드: 로그 패널 포커스 여부 (커밋 목록)
+    pub git_log_focused: bool,
+    /// git 모드: 로그 패널에서 선택된 커밋 인덱스
+    pub git_log_idx: usize,
+    /// git 모드: 커밋의 변경 파일 목록 포커스 여부
+    pub git_log_file_focused: bool,
+    /// git 모드: 선택된 커밋의 변경 파일 목록 (status_char, path)
+    pub git_commit_files: Vec<(char, String)>,
+    /// git 모드: 변경 파일 목록에서 선택된 인덱스
+    pub git_commit_file_idx: usize,
+    /// git 모드: 선택된 파일의 diff 내용
+    pub git_commit_show: Vec<String>,
+    /// git 모드: diff 스크롤 오프셋
+    pub git_commit_show_scroll: u16,
+    /// git 모드: diff 수평 스크롤 오프셋 (공통)
+    pub git_diff_h_scroll: u16,
+    /// git 모드: diff 줄바꿈 여부
+    pub git_diff_wrap: bool,
+    /// git 모드: diff 전체화면 여부
+    pub git_diff_fullscreen: bool,
+    /// 파일 관리: 메뉴 선택 인덱스
+    pub fm_menu_idx: usize,
+    /// 파일 관리: 텍스트 입력 버퍼 (이름/경로)
+    pub fm_input: String,
+    /// 파일 관리: 현재 진행 중인 작업
+    pub fm_operation: Option<FmOp>,
+    /// 파일 관리: 마지막 오류 메시지
+    pub fm_error: Option<String>,
 }
 
 impl App {
@@ -116,6 +184,7 @@ impl App {
         let preview_wrap = config.preview.wrap;
 
         let filtered_indices = (0..file_entries.len()).collect();
+        let git_status = crate::git::get_status(&current_dir);
         Ok(Self {
             current_dir,
             file_entries,
@@ -144,6 +213,30 @@ impl App {
             viewer_goto_input: String::new(),
             viewer_is_goto: false,
             viewer_prev_key: None,
+            git_status,
+            git_section: GitSection::Unstaged,
+            git_staged_idx: 0,
+            git_unstaged_idx: 0,
+            git_diff: Vec::new(),
+            git_diff_scroll: 0,
+            git_is_committing: false,
+            git_commit_input: String::new(),
+            git_show_log: false,
+            git_log: Vec::new(),
+            git_log_focused: false,
+            git_log_idx: 0,
+            git_log_file_focused: false,
+            git_commit_files: Vec::new(),
+            git_commit_file_idx: 0,
+            git_commit_show: Vec::new(),
+            git_commit_show_scroll: 0,
+            git_diff_h_scroll: 0,
+            git_diff_wrap: false,
+            git_diff_fullscreen: false,
+            fm_menu_idx: 0,
+            fm_input: String::new(),
+            fm_operation: None,
+            fm_error: None,
         })
     }
 
@@ -193,6 +286,8 @@ impl App {
             AppMode::Settings => self.handle_key_settings(key),
             AppMode::CommandPalette => self.handle_key_palette(key),
             AppMode::Help => self.handle_key_help(key),
+            AppMode::Git => self.handle_key_git(key),
+            AppMode::FileManager => self.handle_key_file_manager(key),
         }
     }
 
@@ -257,6 +352,37 @@ impl App {
                 if !self.config.bookmarks.is_empty() {
                     self.focused_panel = FocusedPanel::Bookmarks;
                 }
+            }
+            KeyCode::Char('m') => {
+                if self.selected_path().is_some() {
+                    self.fm_menu_idx = 0;
+                    self.fm_operation = None;
+                    self.fm_error = None;
+                    self.fm_input.clear();
+                    self.mode = AppMode::FileManager;
+                }
+            }
+            KeyCode::Char('g') => {
+                self.refresh_git_status();
+                self.git_staged_idx = 0;
+                self.git_unstaged_idx = 0;
+                self.git_is_committing = false;
+                self.git_commit_input.clear();
+                self.git_show_log = false;
+                self.git_log.clear();
+                self.git_log_focused = false;
+                self.git_log_idx = 0;
+                self.git_log_file_focused = false;
+                self.git_commit_files.clear();
+                self.git_commit_file_idx = 0;
+                self.git_commit_show.clear();
+                self.git_commit_show_scroll = 0;
+                self.git_diff_h_scroll = 0;
+                self.git_diff_wrap = false;
+                self.git_diff_fullscreen = false;
+                self.git_section = GitSection::Unstaged;
+                self.mode = AppMode::Git;
+                self.load_git_diff();
             }
             _ => {}
         }
@@ -441,6 +567,550 @@ impl App {
             self.mode = AppMode::FileList;
         }
         Ok(())
+    }
+
+    /// Git 관리 모드 키 처리
+    fn handle_key_git(&mut self, key: KeyEvent) -> Result<()> {
+        // 커밋 메시지 입력 중
+        if self.git_is_committing {
+            match key.code {
+                KeyCode::Esc => {
+                    self.git_is_committing = false;
+                    self.git_commit_input.clear();
+                }
+                KeyCode::Enter => {
+                    if !self.git_commit_input.is_empty() {
+                        if let Some(status) = &self.git_status {
+                            let root = status.root.clone();
+                            let msg = self.git_commit_input.clone();
+                            crate::git::commit_changes(&root, &msg);
+                        }
+                        self.git_is_committing = false;
+                        self.git_commit_input.clear();
+                        self.refresh_git_status();
+                        self.load_git_diff();
+                    }
+                }
+                KeyCode::Backspace => { self.git_commit_input.pop(); }
+                KeyCode::Char(c) => { self.git_commit_input.push(c); }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // diff 전체화면 모드
+        if self.git_diff_fullscreen {
+            let has_commit_diff = !self.git_commit_show.is_empty();
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.mode = AppMode::FileList;
+                }
+                KeyCode::Esc | KeyCode::Char('f') => {
+                    self.git_diff_fullscreen = false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if has_commit_diff {
+                        self.git_commit_show_scroll =
+                            self.git_commit_show_scroll.saturating_sub(1);
+                    } else {
+                        self.git_diff_scroll = self.git_diff_scroll.saturating_sub(1);
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if has_commit_diff {
+                        self.git_commit_show_scroll += 1;
+                    } else {
+                        self.git_diff_scroll += 1;
+                    }
+                }
+                KeyCode::PageUp => {
+                    if has_commit_diff {
+                        self.git_commit_show_scroll =
+                            self.git_commit_show_scroll.saturating_sub(10);
+                    } else {
+                        self.git_diff_scroll = self.git_diff_scroll.saturating_sub(10);
+                    }
+                }
+                KeyCode::PageDown | KeyCode::Char(' ') => {
+                    if has_commit_diff {
+                        self.git_commit_show_scroll += 10;
+                    } else {
+                        self.git_diff_scroll += 10;
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('[') => {
+                    if !self.git_diff_wrap {
+                        self.git_diff_h_scroll = self.git_diff_h_scroll.saturating_sub(4);
+                    }
+                }
+                KeyCode::Right | KeyCode::Char(']') => {
+                    if !self.git_diff_wrap {
+                        self.git_diff_h_scroll += 4;
+                    }
+                }
+                KeyCode::Char('w') => {
+                    self.git_diff_wrap = !self.git_diff_wrap;
+                    if self.git_diff_wrap {
+                        self.git_diff_h_scroll = 0;
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // 범용 diff 조작키 (모드 무관)
+        match key.code {
+            KeyCode::Char('[') => {
+                if !self.git_diff_wrap {
+                    self.git_diff_h_scroll = self.git_diff_h_scroll.saturating_sub(4);
+                }
+                return Ok(());
+            }
+            KeyCode::Char(']') => {
+                if !self.git_diff_wrap {
+                    self.git_diff_h_scroll += 4;
+                }
+                return Ok(());
+            }
+            KeyCode::Char('w') => {
+                self.git_diff_wrap = !self.git_diff_wrap;
+                if self.git_diff_wrap {
+                    self.git_diff_h_scroll = 0;
+                }
+                return Ok(());
+            }
+            KeyCode::Char('f') => {
+                let has_diff = !self.git_diff.is_empty() || !self.git_commit_show.is_empty();
+                if has_diff {
+                    self.git_diff_fullscreen = true;
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // 커밋 변경 파일 포커스 상태
+        if self.git_log_focused && self.git_log_file_focused {
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.mode = AppMode::FileList;
+                }
+                KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                    self.git_log_file_focused = false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.git_commit_file_idx > 0 {
+                        self.git_commit_file_idx -= 1;
+                        self.load_commit_file_diff();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.git_commit_file_idx + 1 < self.git_commit_files.len() {
+                        self.git_commit_file_idx += 1;
+                        self.load_commit_file_diff();
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('d') => {
+                    self.load_commit_file_diff();
+                }
+                KeyCode::PageUp => {
+                    self.git_commit_show_scroll =
+                        self.git_commit_show_scroll.saturating_sub(10);
+                }
+                KeyCode::PageDown => {
+                    self.git_commit_show_scroll =
+                        self.git_commit_show_scroll.saturating_add(10);
+                }
+                KeyCode::Char('L') => {
+                    self.git_show_log = false;
+                    self.git_log_focused = false;
+                    self.git_log_file_focused = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // 커밋 목록 포커스 상태
+        if self.git_log_focused {
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.mode = AppMode::FileList;
+                }
+                KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                    self.git_log_focused = false;
+                    self.git_log_file_focused = false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.git_log_idx > 0 {
+                        self.git_log_idx -= 1;
+                        self.git_log_file_focused = false;
+                        self.load_commit_show();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.git_log_idx + 1 < self.git_log.len() {
+                        self.git_log_idx += 1;
+                        self.git_log_file_focused = false;
+                        self.load_commit_show();
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('d') => {
+                    if !self.git_commit_files.is_empty() {
+                        self.git_log_file_focused = true;
+                        self.git_commit_file_idx = 0;
+                        self.load_commit_file_diff();
+                    } else {
+                        self.load_commit_show();
+                    }
+                }
+                KeyCode::PageUp => {
+                    self.git_commit_show_scroll =
+                        self.git_commit_show_scroll.saturating_sub(10);
+                }
+                KeyCode::PageDown => {
+                    self.git_commit_show_scroll =
+                        self.git_commit_show_scroll.saturating_add(10);
+                }
+                KeyCode::Char('L') => {
+                    self.git_show_log = false;
+                    self.git_log_focused = false;
+                    self.git_log_file_focused = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // 파일 패널 포커스 상태 (기본)
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = AppMode::FileList;
+            }
+            KeyCode::Tab => {
+                self.git_section = match self.git_section {
+                    GitSection::Staged => GitSection::Unstaged,
+                    GitSection::Unstaged => GitSection::Staged,
+                };
+                self.load_git_diff();
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.git_show_log && !self.git_log.is_empty() {
+                    self.git_log_focused = true;
+                    self.git_log_file_focused = false;
+                    self.load_commit_show();
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                match self.git_section {
+                    GitSection::Staged => {
+                        if self.git_staged_idx > 0 { self.git_staged_idx -= 1; }
+                    }
+                    GitSection::Unstaged => {
+                        if self.git_unstaged_idx > 0 { self.git_unstaged_idx -= 1; }
+                    }
+                }
+                self.load_git_diff();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref status) = self.git_status {
+                    match self.git_section {
+                        GitSection::Staged => {
+                            if self.git_staged_idx + 1 < status.staged.len() {
+                                self.git_staged_idx += 1;
+                            }
+                        }
+                        GitSection::Unstaged => {
+                            if self.git_unstaged_idx + 1 < status.unstaged.len() {
+                                self.git_unstaged_idx += 1;
+                            }
+                        }
+                    }
+                }
+                self.load_git_diff();
+            }
+            KeyCode::Char('a') => {
+                if self.git_section == GitSection::Unstaged {
+                    if let Some(ref status) = self.git_status {
+                        if let Some(file) = status.unstaged.get(self.git_unstaged_idx) {
+                            let root = status.root.clone();
+                            let path = file.path.clone();
+                            crate::git::stage_file(&root, &path);
+                        }
+                    }
+                    self.refresh_git_status();
+                    self.load_git_diff();
+                }
+            }
+            KeyCode::Char('u') => {
+                if self.git_section == GitSection::Staged {
+                    if let Some(ref status) = self.git_status {
+                        if let Some(file) = status.staged.get(self.git_staged_idx) {
+                            let root = status.root.clone();
+                            let path = file.path.clone();
+                            crate::git::unstage_file(&root, &path);
+                        }
+                    }
+                    self.refresh_git_status();
+                    self.load_git_diff();
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('d') => {
+                self.git_show_log = false;
+                self.git_log_focused = false;
+                self.load_git_diff();
+            }
+            KeyCode::Char('c') => {
+                let has_staged = self.git_status.as_ref()
+                    .map(|s| !s.staged.is_empty())
+                    .unwrap_or(false);
+                if has_staged {
+                    self.git_is_committing = true;
+                    self.git_commit_input.clear();
+                }
+            }
+            KeyCode::Char('L') => {
+                self.git_show_log = !self.git_show_log;
+                if self.git_show_log {
+                    if let Some(ref status) = self.git_status {
+                        let root = status.root.clone();
+                        self.git_log = crate::git::get_log(&root);
+                    }
+                    self.git_log_idx = 0;
+                    self.git_log_focused = false;
+                    self.git_log_file_focused = false;
+                    self.git_commit_files.clear();
+                    self.git_commit_file_idx = 0;
+                    self.git_commit_show.clear();
+                    self.git_commit_show_scroll = 0;
+                } else {
+                    self.git_log_focused = false;
+                }
+            }
+            KeyCode::Char('r') => {
+                self.refresh_git_status();
+                self.load_git_diff();
+            }
+            KeyCode::PageUp => {
+                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.git_diff_scroll = self.git_diff_scroll.saturating_add(10);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_key_file_manager(&mut self, key: KeyEvent) -> Result<()> {
+        match self.fm_operation.clone() {
+            None => self.handle_fm_menu(key),
+            Some(FmOp::Delete) => self.handle_fm_delete(key),
+            Some(_) => self.handle_fm_input(key),
+        }
+    }
+
+    fn handle_fm_menu(&mut self, key: KeyEvent) -> Result<()> {
+        const MENU_LEN: usize = 4;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = AppMode::FileList;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.fm_menu_idx > 0 { self.fm_menu_idx -= 1; }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.fm_menu_idx + 1 < MENU_LEN { self.fm_menu_idx += 1; }
+            }
+            KeyCode::Char('c') => self.fm_start(FmOp::Copy),
+            KeyCode::Char('v') => self.fm_start(FmOp::Move),
+            KeyCode::Char('r') => self.fm_start(FmOp::Rename),
+            KeyCode::Char('d') => self.fm_start(FmOp::Delete),
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                let op = match self.fm_menu_idx {
+                    0 => FmOp::Copy,
+                    1 => FmOp::Move,
+                    2 => FmOp::Rename,
+                    _ => FmOp::Delete,
+                };
+                self.fm_start(op);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn fm_start(&mut self, op: FmOp) {
+        self.fm_error = None;
+        self.fm_menu_idx = match op {
+            FmOp::Copy => 0,
+            FmOp::Move => 1,
+            FmOp::Rename => 2,
+            FmOp::Delete => 3,
+        };
+        let input = match op {
+            FmOp::Rename => self
+                .selected_path()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string(),
+            FmOp::Copy | FmOp::Move => {
+                format!("{}/", self.current_dir.display())
+            }
+            FmOp::Delete => String::new(),
+        };
+        self.fm_input = input;
+        self.fm_operation = Some(op);
+    }
+
+    fn handle_fm_delete(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('y') => {
+                if let Some(path) = self.selected_path().cloned() {
+                    match crate::fs::ops::delete_file(&path) {
+                        Ok(_) => {
+                            self.fm_operation = None;
+                            self.mode = AppMode::FileList;
+                            self.fm_refresh_file_list();
+                        }
+                        Err(e) => {
+                            self.fm_error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.fm_operation = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_fm_input(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.fm_operation = None;
+                self.fm_error = None;
+            }
+            KeyCode::Backspace => { self.fm_input.pop(); }
+            KeyCode::Char(c) => { self.fm_input.push(c); }
+            KeyCode::Enter => self.execute_fm_operation()?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_fm_operation(&mut self) -> Result<()> {
+        let src = match self.selected_path().cloned() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let input = self.fm_input.trim().to_string();
+        if input.is_empty() {
+            self.fm_error = Some("경로를 입력하세요.".to_string());
+            return Ok(());
+        }
+
+        let op = self.fm_operation.clone();
+        let result = match op {
+            Some(FmOp::Rename) => crate::fs::ops::rename_file(&src, &input).map(|_| ()),
+            Some(FmOp::Copy) => {
+                crate::fs::ops::copy_file(&src, &std::path::PathBuf::from(&input))
+            }
+            Some(FmOp::Move) => {
+                crate::fs::ops::move_file(&src, &std::path::PathBuf::from(&input))
+            }
+            _ => return Ok(()),
+        };
+
+        match result {
+            Ok(_) => {
+                self.fm_operation = None;
+                self.fm_error = None;
+                self.mode = AppMode::FileList;
+                self.fm_refresh_file_list();
+            }
+            Err(e) => {
+                self.fm_error = Some(e.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn fm_refresh_file_list(&mut self) {
+        self.file_entries = crate::fs::ops::list_dir(&self.current_dir).unwrap_or_default();
+        self.search_query.clear();
+        self.is_searching = false;
+        self.filtered_indices = (0..self.file_entries.len()).collect();
+        self.selected_index = self.selected_index.min(
+            self.filtered_indices.len().saturating_sub(1)
+        );
+        self.preview_scroll = 0;
+        self.git_status = crate::git::get_status(&self.current_dir);
+    }
+
+    fn refresh_git_status(&mut self) {
+        self.git_status = crate::git::get_status(&self.current_dir);
+        if let Some(ref status) = self.git_status {
+            if self.git_staged_idx >= status.staged.len().max(1) {
+                self.git_staged_idx = status.staged.len().saturating_sub(1);
+            }
+            if self.git_unstaged_idx >= status.unstaged.len().max(1) {
+                self.git_unstaged_idx = status.unstaged.len().saturating_sub(1);
+            }
+        }
+    }
+
+    /// 선택된 커밋의 변경 파일 목록 로드
+    fn load_commit_show(&mut self) {
+        if let Some(ref status) = self.git_status {
+            if let Some(entry) = self.git_log.get(self.git_log_idx) {
+                let hash = entry.split_whitespace().next().unwrap_or("").to_string();
+                if !hash.is_empty() {
+                    let root = status.root.clone();
+                    self.git_commit_files = crate::git::get_commit_files(&root, &hash);
+                    self.git_commit_file_idx = 0;
+                    self.git_commit_show.clear();
+                    self.git_commit_show_scroll = 0;
+                }
+            }
+        }
+    }
+
+    /// 선택된 커밋의 선택된 파일 diff 로드
+    fn load_commit_file_diff(&mut self) {
+        if let Some(ref status) = self.git_status {
+            if let Some(log_entry) = self.git_log.get(self.git_log_idx) {
+                let hash = log_entry.split_whitespace().next().unwrap_or("").to_string();
+                if let Some((_, path)) = self.git_commit_files.get(self.git_commit_file_idx) {
+                    let root = status.root.clone();
+                    let path = path.clone();
+                    self.git_commit_show =
+                        crate::git::get_commit_file_diff(&root, &hash, &path);
+                    self.git_commit_show_scroll = 0;
+                    self.git_diff_h_scroll = 0;
+                }
+            }
+        }
+    }
+
+    fn load_git_diff(&mut self) {
+        self.git_diff_scroll = 0;
+        self.git_diff_h_scroll = 0;
+        if let Some(ref status) = self.git_status {
+            let (file, is_staged) = match self.git_section {
+                GitSection::Staged => (status.staged.get(self.git_staged_idx), true),
+                GitSection::Unstaged => (status.unstaged.get(self.git_unstaged_idx), false),
+            };
+            if let Some(f) = file {
+                let root = status.root.clone();
+                let path = f.path.clone();
+                self.git_diff = crate::git::get_diff(&root, &path, is_staged);
+            }
+        }
     }
 
     /// 마우스 이벤트 처리
@@ -709,6 +1379,7 @@ impl App {
         self.search_query.clear();
         self.is_searching = false;
         self.filtered_indices = (0..self.file_entries.len()).collect();
+        self.git_status = crate::git::get_status(&self.current_dir);
         Ok(())
     }
 
