@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); cmd=$(echo \"$input\" | jq -r '.tool_input.command // empty'); if echo \"$cmd\" | grep -qE 'rm -rf|DROP TABLE|git push --force|git reset --hard'; then echo \"BLOCKED: 위험 명령 감지 — $cmd\" >&2; exit 1; fi"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 세션 완료\" >> .claude/tasks/session.log 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

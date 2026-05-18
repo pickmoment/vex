@@ -1,0 +1,5 @@
+/target
+.DS_Store
+.claude/tasks/
+.claude/skills/
+harness.md

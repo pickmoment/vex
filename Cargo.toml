@@ -1,0 +1,63 @@
+[package]
+name = "vex"
+version = "0.1.0"
+edition = "2021"
+description = "VEX — Visual EXplorer: 터미널 안의 파일 뷰어"
+authors = ["VEX Contributors"]
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "vex"
+path = "src/main.rs"
+
+[dependencies]
+# TUI 프레임워크
+ratatui = "0.28"
+
+# 비동기 런타임
+tokio = { version = "1", features = ["full"] }
+
+# 터미널 이벤트 처리
+crossterm = "0.28"
+
+# 마크다운 파싱
+pulldown-cmark = "0.11"
+
+# 신택스 하이라이팅
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+
+# 이미지 렌더링
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ratatui-image = "2"
+
+# 파일시스템 감시
+notify = "6"
+
+# CSV 파싱
+csv = "1"
+
+# 설정 관리
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+config = { version = "0.14", features = ["toml"] }
+
+# 크로스플랫폼 경로
+dirs = "5"
+
+# 퍼지 검색
+nucleo = "0.5"
+
+# 에러 처리
+anyhow = "1"
+thiserror = "1"
+
+# 로깅
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
