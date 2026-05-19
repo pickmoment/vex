@@ -173,6 +173,12 @@ pub struct App {
     pub fm_operation: Option<FmOp>,
     /// 파일 관리: 마지막 오류 메시지
     pub fm_error: Option<String>,
+    /// 파일 목록 패널의 실제 내부 높이 (렌더링 시 기록)
+    pub file_list_height: u16,
+    /// 뷰어 콘텐츠 영역의 실제 내부 높이 (렌더링 시 기록)
+    pub viewer_height: u16,
+    /// Git diff 패널의 실제 내부 높이 (렌더링 시 기록)
+    pub git_diff_panel_height: u16,
 }
 
 impl App {
@@ -237,6 +243,9 @@ impl App {
             fm_input: String::new(),
             fm_operation: None,
             fm_error: None,
+            file_list_height: 0,
+            viewer_height: 0,
+            git_diff_panel_height: 0,
         })
     }
 
@@ -326,8 +335,14 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Up | KeyCode::Char('k') => self.move_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_down(),
-            KeyCode::PageUp => self.jump_up(10),
-            KeyCode::PageDown => self.jump_down(10),
+            KeyCode::PageUp => {
+                let n = self.file_list_height.max(1) as usize;
+                self.jump_up(n);
+            }
+            KeyCode::PageDown => {
+                let n = self.file_list_height.max(1) as usize;
+                self.jump_down(n);
+            }
             KeyCode::Left | KeyCode::Char('h') => self.go_parent(),
             KeyCode::Right | KeyCode::Char('l') => self.enter_or_open()?,
             KeyCode::Enter => self.open_with_or_navigate()?,
@@ -352,6 +367,9 @@ impl App {
                 if !self.config.bookmarks.is_empty() {
                     self.focused_panel = FocusedPanel::Bookmarks;
                 }
+            }
+            KeyCode::Char('r') => {
+                self.refresh_file_list();
             }
             KeyCode::Char('m') => {
                 if self.selected_path().is_some() {
@@ -451,9 +469,13 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 self.preview_scroll = self.preview_scroll.saturating_add(1);
             }
-            KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(20),
+            KeyCode::PageUp => {
+                let n = self.viewer_height.max(1);
+                self.preview_scroll = self.preview_scroll.saturating_sub(n);
+            }
             KeyCode::PageDown | KeyCode::Char(' ') => {
-                self.preview_scroll = self.preview_scroll.saturating_add(20);
+                let n = self.viewer_height.max(1);
+                self.preview_scroll = self.preview_scroll.saturating_add(n);
             }
             KeyCode::Left => self.preview_h_scroll = self.preview_h_scroll.saturating_sub(4),
             KeyCode::Right => self.preview_h_scroll = self.preview_h_scroll.saturating_add(4),
@@ -624,18 +646,20 @@ impl App {
                     }
                 }
                 KeyCode::PageUp => {
+                    let n = self.git_diff_panel_height.max(1);
                     if has_commit_diff {
                         self.git_commit_show_scroll =
-                            self.git_commit_show_scroll.saturating_sub(10);
+                            self.git_commit_show_scroll.saturating_sub(n);
                     } else {
-                        self.git_diff_scroll = self.git_diff_scroll.saturating_sub(10);
+                        self.git_diff_scroll = self.git_diff_scroll.saturating_sub(n);
                     }
                 }
                 KeyCode::PageDown | KeyCode::Char(' ') => {
+                    let n = self.git_diff_panel_height.max(1);
                     if has_commit_diff {
-                        self.git_commit_show_scroll += 10;
+                        self.git_commit_show_scroll += n;
                     } else {
-                        self.git_diff_scroll += 10;
+                        self.git_diff_scroll += n;
                     }
                 }
                 KeyCode::Left | KeyCode::Char('[') => {
@@ -715,12 +739,14 @@ impl App {
                     self.load_commit_file_diff();
                 }
                 KeyCode::PageUp => {
+                    let n = self.git_diff_panel_height.max(1);
                     self.git_commit_show_scroll =
-                        self.git_commit_show_scroll.saturating_sub(10);
+                        self.git_commit_show_scroll.saturating_sub(n);
                 }
                 KeyCode::PageDown => {
+                    let n = self.git_diff_panel_height.max(1);
                     self.git_commit_show_scroll =
-                        self.git_commit_show_scroll.saturating_add(10);
+                        self.git_commit_show_scroll.saturating_add(n);
                 }
                 KeyCode::Char('L') => {
                     self.git_show_log = false;
@@ -766,12 +792,14 @@ impl App {
                     }
                 }
                 KeyCode::PageUp => {
+                    let n = self.git_diff_panel_height.max(1);
                     self.git_commit_show_scroll =
-                        self.git_commit_show_scroll.saturating_sub(10);
+                        self.git_commit_show_scroll.saturating_sub(n);
                 }
                 KeyCode::PageDown => {
+                    let n = self.git_diff_panel_height.max(1);
                     self.git_commit_show_scroll =
-                        self.git_commit_show_scroll.saturating_add(10);
+                        self.git_commit_show_scroll.saturating_add(n);
                 }
                 KeyCode::Char('L') => {
                     self.git_show_log = false;
@@ -893,10 +921,12 @@ impl App {
                 self.load_git_diff();
             }
             KeyCode::PageUp => {
-                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(10);
+                let n = self.git_diff_panel_height.max(1);
+                self.git_diff_scroll = self.git_diff_scroll.saturating_sub(n);
             }
             KeyCode::PageDown => {
-                self.git_diff_scroll = self.git_diff_scroll.saturating_add(10);
+                let n = self.git_diff_panel_height.max(1);
+                self.git_diff_scroll = self.git_diff_scroll.saturating_add(n);
             }
             _ => {}
         }
@@ -1050,6 +1080,21 @@ impl App {
         );
         self.preview_scroll = 0;
         self.git_status = crate::git::get_status(&self.current_dir);
+    }
+
+    fn refresh_file_list(&mut self) {
+        let prev_selected_path = self.selected_path().cloned();
+        self.file_entries = crate::fs::ops::list_dir(&self.current_dir).unwrap_or_default();
+        self.git_status = crate::git::get_status(&self.current_dir);
+        self.update_filter();
+        // 이전에 선택된 파일이 여전히 존재하면 해당 위치로 커서 복원
+        if let Some(prev) = prev_selected_path {
+            if let Some(pos) = self.filtered_indices.iter().position(|&i| {
+                self.file_entries.get(i).map(|e| e.path == prev).unwrap_or(false)
+            }) {
+                self.selected_index = pos;
+            }
+        }
     }
 
     fn refresh_git_status(&mut self) {

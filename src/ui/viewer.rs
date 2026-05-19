@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::app::{App, FileType};
 
 /// 전체화면 뷰어 모드 렌더링
-pub fn render_fullscreen(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
     let selected_path = match app.selected_path() {
         Some(p) => p.clone(),
         None => {
@@ -31,6 +31,8 @@ pub fn render_fullscreen(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(area);
 
+    // 블록 상단 테두리 없음(LEFT|RIGHT|BOTTOM)이므로 내부 높이 = height - 1
+    app.viewer_height = chunks[1].height.saturating_sub(1);
     render_viewer_toolbar(f, chunks[0], &selected_path, &file_type, app.preview_wrap);
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)

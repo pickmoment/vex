@@ -22,6 +22,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
         (area, None)
     };
 
+    app.file_list_height = list_area.height.saturating_sub(2);
     let border_color = if app.is_searching { Color::Yellow } else { Color::Blue };
     let title = if app.is_searching {
         format!(" 파일 목록  {}건 ", app.filtered_indices.len())

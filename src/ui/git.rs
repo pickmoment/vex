@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::{App, GitSection};
 
-pub fn render(f: &mut Frame, area: Rect, app: &App) {
+pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -54,7 +54,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-fn render_content(f: &mut Frame, area: Rect, app: &App) {
+fn render_content(f: &mut Frame, area: Rect, app: &mut App) {
     if app.git_status.is_none() {
         render_not_a_repo(f, area);
         return;
@@ -78,7 +78,7 @@ fn render_content(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// 로그 모드 전용 3패널 레이아웃: 커밋 목록 | 변경 파일 | diff
-fn render_log_mode(f: &mut Frame, area: Rect, app: &App) {
+fn render_log_mode(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -234,7 +234,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn render_right_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_right_panel(f: &mut Frame, area: Rect, app: &mut App) {
     if !app.git_diff.is_empty() {
         render_diff_panel(f, area, app);
     } else {
@@ -258,7 +258,8 @@ fn render_diff_hint(f: &mut Frame, area: Rect, _app: &App) {
     f.render_widget(para, area);
 }
 
-fn render_diff_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_diff_panel(f: &mut Frame, area: Rect, app: &mut App) {
+    app.git_diff_panel_height = area.height.saturating_sub(2);
     let selected_file = get_selected_file_name(app).unwrap_or_default();
     let wrap_indicator = if app.git_diff_wrap { " [줄바꿈ON]" } else { "" };
     let title = format!(" diff: {selected_file}{wrap_indicator} ");
@@ -419,7 +420,8 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_commit_file_diff(f: &mut Frame, area: Rect, app: &App) {
+fn render_commit_file_diff(f: &mut Frame, area: Rect, app: &mut App) {
+    app.git_diff_panel_height = area.height.saturating_sub(2);
     let file_name = if app.git_log_file_focused {
         app.git_commit_files
             .get(app.git_commit_file_idx)
@@ -496,7 +498,8 @@ fn render_diff_content(
 }
 
 /// diff 전체화면 렌더링
-pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
+    app.git_diff_panel_height = area.height.saturating_sub(2);
     use ratatui::widgets::Wrap;
 
     let (content, v_scroll, file_label) = if !app.git_commit_show.is_empty() {

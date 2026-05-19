@@ -54,6 +54,7 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("m", "파일관리"),
             ("b", "즐겨찾기"),
             ("/", "검색"),
+            ("r", "새로고침"),
             ("q", "종료"),
         ],
         AppMode::OpenWith => vec![
