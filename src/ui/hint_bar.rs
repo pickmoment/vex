@@ -87,7 +87,7 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("Esc/?", "닫기"),
         ],
         AppMode::Git => {
-            let section_hint = if app.git_section == GitSection::Staged {
+            let section_hint = if app.git.section == GitSection::Staged {
                 ("u", "언스테이지")
             } else {
                 ("a", "스테이지")

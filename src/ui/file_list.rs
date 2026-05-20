@@ -35,8 +35,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let git_root = app.git_status.as_ref().map(|s| &s.root);
-    let git_map = app.git_status.as_ref().map(|s| &s.file_map);
+    let git_root = app.git.status.as_ref().map(|s| &s.root);
+    let git_map = app.git.status.as_ref().map(|s| &s.file_map);
 
     let items: Vec<ListItem> = app
         .filtered_indices

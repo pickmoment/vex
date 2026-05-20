@@ -12,6 +12,7 @@ mod config;
 mod fs;
 mod git;
 mod preview;
+mod state;
 mod ui;
 
 use app::App;

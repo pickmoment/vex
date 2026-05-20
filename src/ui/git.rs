@@ -24,7 +24,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let (branch, staged_count, unstaged_count) = if let Some(ref status) = app.git_status {
+    let (branch, staged_count, unstaged_count) = if let Some(ref status) = app.git.status {
         (
             status.branch.as_str(),
             status.staged.len(),
@@ -55,17 +55,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_content(f: &mut Frame, area: Rect, app: &mut App) {
-    if app.git_status.is_none() {
+    if app.git.status.is_none() {
         render_not_a_repo(f, area);
         return;
     }
 
-    if app.git_diff_fullscreen {
+    if app.git.diff_fullscreen {
         render_diff_fullscreen(f, area, app);
         return;
     }
 
-    if app.git_show_log {
+    if app.git.show_log {
         render_log_mode(f, area, app);
     } else {
         let chunks = Layout::default()
@@ -110,7 +110,7 @@ fn render_not_a_repo(f: &mut Frame, area: Rect) {
 }
 
 fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
-    let status = match app.git_status.as_ref() {
+    let status = match app.git.status.as_ref() {
         Some(s) => s,
         None => return,
     };
@@ -121,7 +121,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     // 스테이징 영역
-    let staged_focused = app.git_section == GitSection::Staged;
+    let staged_focused = app.git.section == GitSection::Staged;
     let staged_border = if staged_focused { Color::Green } else { Color::DarkGray };
     let staged_title = format!(" 스테이징 ({}) ", status.staged.len());
 
@@ -160,7 +160,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
         let mut state = ListState::default();
         if staged_focused {
             state.select(Some(
-                app.git_staged_idx.min(status.staged.len().saturating_sub(1)),
+                app.git.staged_idx.min(status.staged.len().saturating_sub(1)),
             ));
         }
         let list = List::new(staged_items)
@@ -176,7 +176,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
     }
 
     // 워킹 트리 (unstaged)
-    let unstaged_focused = app.git_section == GitSection::Unstaged;
+    let unstaged_focused = app.git.section == GitSection::Unstaged;
     let unstaged_border = if unstaged_focused { Color::Yellow } else { Color::DarkGray };
     let unstaged_title = format!(" 워킹 트리 ({}) ", status.unstaged.len());
 
@@ -218,7 +218,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
         let mut state = ListState::default();
         if unstaged_focused {
             state.select(Some(
-                app.git_unstaged_idx.min(status.unstaged.len().saturating_sub(1)),
+                app.git.unstaged_idx.min(status.unstaged.len().saturating_sub(1)),
             ));
         }
         let list = List::new(unstaged_items)
@@ -235,7 +235,7 @@ fn render_file_panels(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_right_panel(f: &mut Frame, area: Rect, app: &mut App) {
-    if !app.git_diff.is_empty() {
+    if !app.git.diff.is_empty() {
         render_diff_panel(f, area, app);
     } else {
         render_diff_hint(f, area, app);
@@ -259,23 +259,23 @@ fn render_diff_hint(f: &mut Frame, area: Rect, _app: &App) {
 }
 
 fn render_diff_panel(f: &mut Frame, area: Rect, app: &mut App) {
-    app.git_diff_panel_height = area.height.saturating_sub(2);
+    app.git.diff_panel_height = area.height.saturating_sub(2);
     let selected_file = get_selected_file_name(app).unwrap_or_default();
-    let wrap_indicator = if app.git_diff_wrap { " [줄바꿈ON]" } else { "" };
+    let wrap_indicator = if app.git.diff_wrap { " [줄바꿈ON]" } else { "" };
     let title = format!(" diff: {selected_file}{wrap_indicator} ");
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    render_diff_content(f, area, &app.git_diff, app.git_diff_scroll,
-        app.git_diff_h_scroll, app.git_diff_wrap, block);
+    render_diff_content(f, area, &app.git.diff, app.git.diff_scroll,
+        app.git.diff_h_scroll, app.git.diff_wrap, block);
 }
 
 fn render_log_list(f: &mut Frame, area: Rect, app: &App) {
-    let (border_color, title) = if app.git_log_focused && !app.git_log_file_focused {
+    let (border_color, title) = if app.git.log_focused && !app.git.log_file_focused {
         (Color::Magenta, " 커밋 로그  [↑↓:이동  →:파일목록  ←:닫기] ")
-    } else if app.git_log_focused {
+    } else if app.git.log_focused {
         (Color::DarkGray, " 커밋 로그 ")
     } else {
         (Color::DarkGray, " 커밋 로그  [→/l:선택] ")
@@ -286,7 +286,7 @@ fn render_log_list(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    if app.git_log.is_empty() {
+    if app.git.log.is_empty() {
         let para = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -300,7 +300,7 @@ fn render_log_list(f: &mut Frame, area: Rect, app: &App) {
     }
 
     let items: Vec<ListItem> = app
-        .git_log
+        .git.log
         .iter()
         .map(|entry| {
             let parts: Vec<&str> = entry.splitn(2, ' ').collect();
@@ -319,8 +319,8 @@ fn render_log_list(f: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let mut state = ListState::default();
-    if app.git_log_focused {
-        state.select(Some(app.git_log_idx.min(app.git_log.len().saturating_sub(1))));
+    if app.git.log_focused {
+        state.select(Some(app.git.log_idx.min(app.git.log.len().saturating_sub(1))));
     }
 
     let list = List::new(items)
@@ -337,9 +337,9 @@ fn render_log_list(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
-    let (border_color, title) = if app.git_log_focused && app.git_log_file_focused {
+    let (border_color, title) = if app.git.log_focused && app.git.log_file_focused {
         (Color::Yellow, " 변경 파일  [↑↓:이동  Enter:diff  ←:커밋으로] ")
-    } else if app.git_log_focused {
+    } else if app.git.log_focused {
         (Color::DarkGray, " 변경 파일  [→/Enter:선택] ")
     } else {
         (Color::DarkGray, " 변경 파일 ")
@@ -350,7 +350,7 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    if !app.git_log_focused {
+    if !app.git.log_focused {
         let para = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -363,8 +363,8 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    if app.git_commit_files.is_empty() {
-        let hint = if app.git_log_focused {
+    if app.git.commit_files.is_empty() {
+        let hint = if app.git.log_focused {
             "  (파일 없음)"
         } else {
             "  커밋을 선택하세요"
@@ -379,7 +379,7 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
     }
 
     let items: Vec<ListItem> = app
-        .git_commit_files
+        .git.commit_files
         .iter()
         .map(|(status, path)| {
             let color = match status {
@@ -400,10 +400,10 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let mut state = ListState::default();
-    if app.git_log_file_focused {
+    if app.git.log_file_focused {
         state.select(Some(
-            app.git_commit_file_idx
-                .min(app.git_commit_files.len().saturating_sub(1)),
+            app.git.commit_file_idx
+                .min(app.git.commit_files.len().saturating_sub(1)),
         ));
     }
 
@@ -421,17 +421,17 @@ fn render_commit_files_panel(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_commit_file_diff(f: &mut Frame, area: Rect, app: &mut App) {
-    app.git_diff_panel_height = area.height.saturating_sub(2);
-    let file_name = if app.git_log_file_focused {
-        app.git_commit_files
-            .get(app.git_commit_file_idx)
+    app.git.diff_panel_height = area.height.saturating_sub(2);
+    let file_name = if app.git.log_file_focused {
+        app.git.commit_files
+            .get(app.git.commit_file_idx)
             .map(|(_, p)| p.as_str())
             .unwrap_or("")
     } else {
         ""
     };
 
-    let border_color = if app.git_log_file_focused { Color::Cyan } else { Color::DarkGray };
+    let border_color = if app.git.log_file_focused { Color::Cyan } else { Color::DarkGray };
     let title = if file_name.is_empty() {
         " diff ".to_string()
     } else {
@@ -443,10 +443,10 @@ fn render_commit_file_diff(f: &mut Frame, area: Rect, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    if app.git_commit_show.is_empty() {
-        let hint = if app.git_log_file_focused {
+    if app.git.commit_show.is_empty() {
+        let hint = if app.git.log_file_focused {
             "  Enter 또는 d: diff 보기"
-        } else if app.git_log_focused {
+        } else if app.git.log_focused {
             "  →/Enter: 파일 목록으로 이동"
         } else {
             "  →/l: 커밋 선택"
@@ -460,8 +460,8 @@ fn render_commit_file_diff(f: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    render_diff_content(f, area, &app.git_commit_show, app.git_commit_show_scroll,
-        app.git_diff_h_scroll, app.git_diff_wrap, block);
+    render_diff_content(f, area, &app.git.commit_show, app.git.commit_show_scroll,
+        app.git.diff_h_scroll, app.git.diff_wrap, block);
 }
 
 /// diff 내용 렌더링 공통 함수 (수직/수평 스크롤, 줄바꿈 지원)
@@ -499,22 +499,22 @@ fn render_diff_content(
 
 /// diff 전체화면 렌더링
 pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
-    app.git_diff_panel_height = area.height.saturating_sub(2);
+    app.git.diff_panel_height = area.height.saturating_sub(2);
     use ratatui::widgets::Wrap;
 
-    let (content, v_scroll, file_label) = if !app.git_commit_show.is_empty() {
+    let (content, v_scroll, file_label) = if !app.git.commit_show.is_empty() {
         let name = app
-            .git_commit_files
-            .get(app.git_commit_file_idx)
+            .git.commit_files
+            .get(app.git.commit_file_idx)
             .map(|(_, p)| p.as_str())
             .unwrap_or("커밋 diff");
-        (&app.git_commit_show, app.git_commit_show_scroll, name.to_string())
+        (&app.git.commit_show, app.git.commit_show_scroll, name.to_string())
     } else {
         let name = get_selected_file_name(app).unwrap_or_default();
-        (&app.git_diff, app.git_diff_scroll, name)
+        (&app.git.diff, app.git.diff_scroll, name)
     };
 
-    let wrap_label = if app.git_diff_wrap { "w:줄바꿈OFF" } else { "w:줄바꿈ON" };
+    let wrap_label = if app.git.diff_wrap { "w:줄바꿈OFF" } else { "w:줄바꿈ON" };
     let title = format!(
         " diff: {file_label}  [↑↓:스크롤  {wrap_label}  [/]:좌우  f/Esc:닫기] "
     );
@@ -525,7 +525,7 @@ pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(Color::Cyan));
 
     let inner_height = area.height.saturating_sub(2) as usize;
-    let h = if app.git_diff_wrap { 0 } else { app.git_diff_h_scroll as usize };
+    let h = if app.git.diff_wrap { 0 } else { app.git.diff_h_scroll as usize };
 
     let rendered: Vec<Line> = content
         .iter()
@@ -534,7 +534,7 @@ pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
         .map(|l| diff_line_to_tui_h(l, h))
         .collect();
 
-    let para = if app.git_diff_wrap {
+    let para = if app.git.diff_wrap {
         Paragraph::new(rendered)
             .block(block)
             .wrap(Wrap { trim: false })
@@ -546,14 +546,14 @@ pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    if app.git_is_committing {
+    if app.git.is_committing {
         let line = Line::from(vec![
             Span::styled(
                 " 커밋 메시지 ",
                 Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD),
             ),
             Span::raw(": "),
-            Span::styled(app.git_commit_input.clone(), Style::default().fg(Color::White)),
+            Span::styled(app.git.commit_input.clone(), Style::default().fg(Color::White)),
             Span::styled("█", Style::default().fg(Color::Green)),
             Span::raw("  "),
             Span::styled("[Enter]", Style::default().fg(Color::Black).bg(Color::Green)),
@@ -562,12 +562,12 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(" 취소", Style::default().fg(Color::DarkGray)),
         ]);
         f.render_widget(Paragraph::new(line), area);
-    } else if app.git_diff_fullscreen {
+    } else if app.git.diff_fullscreen {
         // 전체화면 힌트는 타이틀에 포함되므로 빈 줄
         f.render_widget(Paragraph::new(""), area);
         return;
-    } else if app.git_log_focused && app.git_log_file_focused {
-        let wrap_hint = if app.git_diff_wrap { hint_span("w", "줄바꿈OFF") } else { hint_span("w", "줄바꿈ON") };
+    } else if app.git.log_focused && app.git.log_file_focused {
+        let wrap_hint = if app.git.diff_wrap { hint_span("w", "줄바꿈OFF") } else { hint_span("w", "줄바꿈ON") };
         let hints = Line::from(vec![
             hint_span("↑↓", "파일이동"),
             hint_span("Enter/d", "diff"),
@@ -579,7 +579,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             hint_span("q", "닫기"),
         ]);
         f.render_widget(Paragraph::new(hints), area);
-    } else if app.git_log_focused {
+    } else if app.git.log_focused {
         let hints = Line::from(vec![
             hint_span("↑↓", "커밋이동"),
             hint_span("→/Enter", "파일목록"),
@@ -589,14 +589,14 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         ]);
         f.render_widget(Paragraph::new(hints), area);
     } else {
-        let has_staged = app.git_status.as_ref().map(|s| !s.staged.is_empty()).unwrap_or(false);
-        let log_hint = if app.git_show_log {
+        let has_staged = app.git.status.as_ref().map(|s| !s.staged.is_empty()).unwrap_or(false);
+        let log_hint = if app.git.show_log {
             hint_span("→/l", "로그이동")
         } else {
             hint_span("L", "로그")
         };
-        let diff_available = !app.git_diff.is_empty();
-        let wrap_hint = if app.git_diff_wrap { hint_span("w", "줄바꿈OFF") } else { hint_span("w", "줄바꿈ON") };
+        let diff_available = !app.git.diff.is_empty();
+        let wrap_hint = if app.git.diff_wrap { hint_span("w", "줄바꿈OFF") } else { hint_span("w", "줄바꿈ON") };
         let hints: Vec<Span> = vec![
             hint_span("a", "스테이지"),
             hint_span("u", "언스테이지"),
@@ -673,9 +673,9 @@ fn unstaged_status_color(c: char) -> Color {
 }
 
 fn get_selected_file_name(app: &App) -> Option<String> {
-    let status = app.git_status.as_ref()?;
-    match app.git_section {
-        GitSection::Staged => status.staged.get(app.git_staged_idx).map(|f| f.path.clone()),
-        GitSection::Unstaged => status.unstaged.get(app.git_unstaged_idx).map(|f| f.path.clone()),
+    let status = app.git.status.as_ref()?;
+    match app.git.section {
+        GitSection::Staged => status.staged.get(app.git.staged_idx).map(|f| f.path.clone()),
+        GitSection::Unstaged => status.unstaged.get(app.git.unstaged_idx).map(|f| f.path.clone()),
     }
 }
