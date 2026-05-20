@@ -1851,7 +1851,14 @@ impl App {
     /// 상위 디렉토리로 이동
     fn go_parent(&mut self) {
         if let Some(parent) = self.current_dir.parent().map(|p| p.to_path_buf()) {
-            self.navigate_to(parent).ok();
+            let prev_dir = self.current_dir.clone();
+            if self.navigate_to(parent).is_ok() {
+                if let Some(pos) = self.filtered_indices.iter().position(|&i| {
+                    self.file_entries.get(i).map(|e| e.path == prev_dir).unwrap_or(false)
+                }) {
+                    self.selected_index = pos;
+                }
+            }
         }
     }
 
