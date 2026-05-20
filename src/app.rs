@@ -406,6 +406,7 @@ impl App {
         };
         self.selected_index = 0;
         self.preview_scroll = 0;
+        self.preview_h_scroll = 0;
     }
 
     /// 전체화면 뷰어 모드 키 처리
@@ -448,7 +449,11 @@ impl App {
         // 일반 키: prev_key 꺼내기 (gg 감지)
         let prev = self.viewer_prev_key.take();
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.mode = AppMode::FileList,
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.mode = AppMode::FileList;
+                self.preview_scroll = 0;
+                self.preview_h_scroll = 0;
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.preview_scroll = self.preview_scroll.saturating_sub(1);
             }
@@ -1593,6 +1598,7 @@ impl App {
             self.filtered_indices.len().saturating_sub(1)
         );
         self.preview_scroll = 0;
+        self.preview_h_scroll = 0;
         { let root = self.current_dir.clone(); self.git.status = crate::git::get_status(&root); }
     }
 
