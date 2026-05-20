@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::fs::ops::FileEntry;
 use crate::ui::layout::AppLayout;
+use crate::ui::status_bar::StatusMessage;
 
 /// 포커스된 패널
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +39,8 @@ pub enum AppMode {
     Git,
     /// 파일 관리 오버레이 (복사/이동/삭제/이름변경)
     FileManager,
+    /// 경로 클립보드 선택 오버레이
+    PathClipboard,
 }
 
 /// Git 모드에서 포커스된 섹션
@@ -85,10 +88,6 @@ pub struct App {
     pub bookmark_index: usize,
     /// 즐겨찾기 패널 영역 (마우스 클릭 처리용)
     pub bookmarks_area: Option<Rect>,
-    /// 탭 목록 (디렉토리 경로)
-    pub tabs: Vec<PathBuf>,
-    /// 현재 탭 인덱스
-    pub current_tab: usize,
     /// 설정
     pub config: Config,
     /// 종료 플래그
@@ -173,12 +172,18 @@ pub struct App {
     pub fm_operation: Option<FmOp>,
     /// 파일 관리: 마지막 오류 메시지
     pub fm_error: Option<String>,
+    /// 경로 클립보드 목록
+    pub path_clipboard: Vec<PathBuf>,
+    /// 경로 클립보드 선택 인덱스
+    pub path_clipboard_idx: usize,
     /// 파일 목록 패널의 실제 내부 높이 (렌더링 시 기록)
     pub file_list_height: u16,
     /// 뷰어 콘텐츠 영역의 실제 내부 높이 (렌더링 시 기록)
     pub viewer_height: u16,
     /// Git diff 패널의 실제 내부 높이 (렌더링 시 기록)
     pub git_diff_panel_height: u16,
+    /// 상태 메시지 (작업 결과 피드백, TTL 만료 시 None)
+    pub status: Option<StatusMessage>,
 }
 
 impl App {
@@ -199,8 +204,6 @@ impl App {
             focused_panel: FocusedPanel::FileList,
             bookmark_index: 0,
             bookmarks_area: None,
-            tabs: Vec::new(),
-            current_tab: 0,
             config,
             should_quit: false,
             preview_scroll: 0,
@@ -243,15 +246,32 @@ impl App {
             fm_input: String::new(),
             fm_operation: None,
             fm_error: None,
+            path_clipboard: Vec::new(),
+            path_clipboard_idx: 0,
             file_list_height: 0,
             viewer_height: 0,
             git_diff_panel_height: 0,
+            status: None,
         })
+    }
+
+    pub fn set_status_success(&mut self, msg: impl Into<String>) {
+        self.status = Some(StatusMessage::success(msg));
+    }
+
+    pub fn set_status_error(&mut self, msg: impl Into<String>) {
+        self.status = Some(StatusMessage::error(msg));
     }
 
     /// 메인 이벤트 루프
     pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         loop {
+            // 만료된 상태 메시지 제거
+            if let Some(ref s) = self.status {
+                if s.is_expired() {
+                    self.status = None;
+                }
+            }
             // UI 렌더링
             terminal.draw(|f| {
                 AppLayout::render(f, self);
@@ -297,6 +317,7 @@ impl App {
             AppMode::Help => self.handle_key_help(key),
             AppMode::Git => self.handle_key_git(key),
             AppMode::FileManager => self.handle_key_file_manager(key),
+            AppMode::PathClipboard => self.handle_key_path_clipboard(key),
         }
     }
 
@@ -370,6 +391,11 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.refresh_file_list();
+            }
+            KeyCode::Char('y') => {
+                if let Some(path) = self.selected_path().cloned() {
+                    self.add_to_path_clipboard(path);
+                }
             }
             KeyCode::Char('m') => {
                 if self.selected_path().is_some() {
@@ -605,7 +631,10 @@ impl App {
                         if let Some(status) = &self.git_status {
                             let root = status.root.clone();
                             let msg = self.git_commit_input.clone();
-                            crate::git::commit_changes(&root, &msg);
+                            match crate::git::commit_changes(&root, &msg) {
+                                Ok(()) => self.set_status_success("커밋됨"),
+                                Err(e) => self.set_status_error(e),
+                            }
                         }
                         self.git_is_committing = false;
                         self.git_commit_input.clear();
@@ -624,10 +653,7 @@ impl App {
         if self.git_diff_fullscreen {
             let has_commit_diff = !self.git_commit_show.is_empty();
             match key.code {
-                KeyCode::Char('q') => {
-                    self.mode = AppMode::FileList;
-                }
-                KeyCode::Esc | KeyCode::Char('f') => {
+                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('f') => {
                     self.git_diff_fullscreen = false;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -717,10 +743,7 @@ impl App {
         // 커밋 변경 파일 포커스 상태
         if self.git_log_focused && self.git_log_file_focused {
             match key.code {
-                KeyCode::Char('q') => {
-                    self.mode = AppMode::FileList;
-                }
-                KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                     self.git_log_file_focused = false;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -761,10 +784,7 @@ impl App {
         // 커밋 목록 포커스 상태
         if self.git_log_focused {
             match key.code {
-                KeyCode::Char('q') => {
-                    self.mode = AppMode::FileList;
-                }
-                KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                     self.git_log_focused = false;
                     self.git_log_file_focused = false;
                 }
@@ -864,7 +884,10 @@ impl App {
                         if let Some(file) = status.unstaged.get(self.git_unstaged_idx) {
                             let root = status.root.clone();
                             let path = file.path.clone();
-                            crate::git::stage_file(&root, &path);
+                            match crate::git::stage_file(&root, &path) {
+                                Ok(()) => self.set_status_success(format!("스테이지됨: {path}")),
+                                Err(e) => self.set_status_error(e),
+                            }
                         }
                     }
                     self.refresh_git_status();
@@ -877,7 +900,10 @@ impl App {
                         if let Some(file) = status.staged.get(self.git_staged_idx) {
                             let root = status.root.clone();
                             let path = file.path.clone();
-                            crate::git::unstage_file(&root, &path);
+                            match crate::git::unstage_file(&root, &path) {
+                                Ok(()) => self.set_status_success(format!("언스테이지됨: {path}")),
+                                Err(e) => self.set_status_error(e),
+                            }
                         }
                     }
                     self.refresh_git_status();
@@ -999,14 +1025,20 @@ impl App {
         match key.code {
             KeyCode::Char('y') => {
                 if let Some(path) = self.selected_path().cloned() {
+                    let name = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("(알 수 없음)")
+                        .to_string();
                     match crate::fs::ops::delete_file(&path) {
                         Ok(_) => {
                             self.fm_operation = None;
                             self.mode = AppMode::FileList;
                             self.fm_refresh_file_list();
+                            self.set_status_success(format!("삭제됨: {name}"));
                         }
                         Err(e) => {
                             self.fm_error = Some(e.to_string());
+                            self.set_status_error(format!("삭제 실패: {e}"));
                         }
                     }
                 }
@@ -1026,6 +1058,14 @@ impl App {
                 self.fm_error = None;
             }
             KeyCode::Backspace => { self.fm_input.pop(); }
+            KeyCode::Tab => {
+                // Copy/Move 에서만 경로 클립보드 오버레이 열기
+                let is_path_op = matches!(self.fm_operation, Some(FmOp::Copy) | Some(FmOp::Move));
+                if is_path_op && !self.path_clipboard.is_empty() {
+                    self.path_clipboard_idx = 0;
+                    self.mode = AppMode::PathClipboard;
+                }
+            }
             KeyCode::Char(c) => { self.fm_input.push(c); }
             KeyCode::Enter => self.execute_fm_operation()?,
             _ => {}
@@ -1058,6 +1098,13 @@ impl App {
 
         match result {
             Ok(_) => {
+                let op_label = match self.fm_operation {
+                    Some(FmOp::Rename) => "이름 변경됨",
+                    Some(FmOp::Copy) => "복사됨",
+                    Some(FmOp::Move) => "이동됨",
+                    _ => "완료됨",
+                };
+                self.set_status_success(format!("{op_label}: {input}"));
                 self.fm_operation = None;
                 self.fm_error = None;
                 self.mode = AppMode::FileList;
@@ -1065,6 +1112,7 @@ impl App {
             }
             Err(e) => {
                 self.fm_error = Some(e.to_string());
+                self.set_status_error(format!("실패: {e}"));
             }
         }
         Ok(())
@@ -1428,22 +1476,6 @@ impl App {
         Ok(())
     }
 
-    /// 이전 파일 (뷰어 모드)
-    fn prev_file(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-            self.preview_scroll = 0;
-        }
-    }
-
-    /// 다음 파일 (뷰어 모드)
-    fn next_file(&mut self) {
-        if self.selected_index + 1 < self.filtered_indices.len() {
-            self.selected_index += 1;
-            self.preview_scroll = 0;
-        }
-    }
-
     /// 터미널을 일시 해제하고 외부 편집기로 파일 열기 후 복원
     fn open_external_editor_with_terminal<B: Backend>(&self, terminal: &mut Terminal<B>) -> Result<()> {
         let actual = match self.filtered_indices.get(self.selected_index) {
@@ -1471,6 +1503,58 @@ impl App {
         terminal.hide_cursor()?;
         terminal.clear()?;
 
+        Ok(())
+    }
+
+    /// 경로를 클립보드에 추가 (중복 제거)
+    fn add_to_path_clipboard(&mut self, path: PathBuf) {
+        if !self.path_clipboard.contains(&path) {
+            self.path_clipboard.push(path);
+        }
+    }
+
+    /// 경로 클립보드 선택 오버레이 키 처리
+    fn handle_key_path_clipboard(&mut self, key: KeyEvent) -> Result<()> {
+        let len = self.path_clipboard.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = AppMode::FileManager;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.path_clipboard_idx > 0 {
+                    self.path_clipboard_idx -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 && self.path_clipboard_idx + 1 < len {
+                    self.path_clipboard_idx += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(path) = self.path_clipboard.get(self.path_clipboard_idx).cloned() {
+                    self.fm_input = if path.is_dir() {
+                        format!("{}/", path.display())
+                    } else {
+                        path.display().to_string()
+                    };
+                }
+                self.mode = AppMode::FileManager;
+            }
+            KeyCode::Char('d') => {
+                if !self.path_clipboard.is_empty() {
+                    self.path_clipboard.remove(self.path_clipboard_idx);
+                    if self.path_clipboard_idx > 0
+                        && self.path_clipboard_idx >= self.path_clipboard.len()
+                    {
+                        self.path_clipboard_idx = self.path_clipboard.len().saturating_sub(1);
+                    }
+                    if self.path_clipboard.is_empty() {
+                        self.mode = AppMode::FileManager;
+                    }
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 

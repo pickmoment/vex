@@ -134,37 +134,49 @@ pub fn get_diff(root: &Path, path: &str, staged: bool) -> Vec<String> {
     vec!["diff를 가져올 수 없습니다.".to_string()]
 }
 
-pub fn stage_file(root: &Path, path: &str) -> bool {
-    Command::new("git")
+pub fn stage_file(root: &Path, path: &str) -> Result<(), String> {
+    let out = Command::new("git")
         .args(["-C", root.to_str().unwrap_or(""), "add", "--", path])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
-pub fn unstage_file(root: &Path, path: &str) -> bool {
-    Command::new("git")
+pub fn unstage_file(root: &Path, path: &str) -> Result<(), String> {
+    let out = Command::new("git")
         .args([
             "-C", root.to_str().unwrap_or(""),
             "restore", "--staged", "--", path,
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
-pub fn commit_changes(root: &Path, message: &str) -> bool {
-    Command::new("git")
+pub fn commit_changes(root: &Path, message: &str) -> Result<(), String> {
+    let out = Command::new("git")
         .args(["-C", root.to_str().unwrap_or(""), "commit", "-m", message])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// 커밋에 포함된 파일 목록: (status_char, path)
@@ -208,17 +220,6 @@ pub fn get_commit_file_diff(root: &Path, hash: &str, path: &str) -> Vec<String> 
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.lines().map(|l| l.to_string()).collect())
         .unwrap_or_else(|| vec!["diff를 가져올 수 없습니다.".to_string()])
-}
-
-pub fn get_commit_show(root: &Path, hash: &str) -> Vec<String> {
-    Command::new("git")
-        .args(["-C", root.to_str().unwrap_or(""), "show", hash])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.lines().map(|l| l.to_string()).collect())
-        .unwrap_or_else(|| vec!["커밋 정보를 가져올 수 없습니다.".to_string()])
 }
 
 pub fn get_log(root: &Path) -> Vec<String> {

@@ -36,6 +36,11 @@ impl AppLayout {
                 Self::render_main_panels(f, app);
                 fm_ui::render(f, app);
             }
+            AppMode::PathClipboard => {
+                Self::render_main_panels(f, app);
+                fm_ui::render(f, app);
+                Self::render_path_clipboard_overlay(f, app);
+            }
             _ => {
                 Self::render_main_panels(f, app);
             }
@@ -45,14 +50,16 @@ impl AppLayout {
     /// 3-패널 기본 레이아웃 렌더링
     fn render_main_panels(f: &mut Frame, app: &mut App) {
         let area = f.area();
+        let has_status = app.status.is_some();
 
-        // 수직 분할: 상단 탭바 + 중앙 패널 + 하단 힌트바
+        // 수직 분할: 상단 탭바 + 중앙 패널 + 상태바(선택) + 하단 힌트바
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // 탭 + 경로 바
-                Constraint::Min(0),    // 메인 패널 영역
-                Constraint::Length(1), // 힌트 바
+                Constraint::Length(1),                              // 탭 + 경로 바
+                Constraint::Min(0),                                 // 메인 패널 영역
+                Constraint::Length(if has_status { 1 } else { 0 }), // 상태 메시지
+                Constraint::Length(1),                              // 힌트 바
             ])
             .split(area);
 
@@ -74,8 +81,13 @@ impl AppLayout {
         file_list::render(f, horizontal[1], app);
         Self::render_preview_panel(f, horizontal[2], app);
 
+        // 상태 메시지
+        if let Some(ref msg) = app.status {
+            crate::ui::status_bar::render(f, vertical[2], msg);
+        }
+
         // 힌트 바
-        hint_bar::render(f, vertical[2], app);
+        hint_bar::render(f, vertical[3], app);
     }
 
     /// 탭 + 현재 경로 바
@@ -211,6 +223,76 @@ impl AppLayout {
         f.render_widget(para, area);
     }
 
+    /// 경로 클립보드 선택 오버레이
+    fn render_path_clipboard_overlay(f: &mut Frame, app: &App) {
+        use ratatui::{
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+        };
+
+        let count = app.path_clipboard.len();
+        let height = (count + 5).min(20) as u16;
+        let area = centered_rect_abs(66, height, f.area());
+        f.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(" 경로 클립보드 ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta));
+
+        let available_width = area.width.saturating_sub(4) as usize;
+
+        let items: Vec<ListItem> = app
+            .path_clipboard
+            .iter()
+            .map(|p| {
+                let full = p.display().to_string();
+                // 너무 길면 왼쪽을 잘라 마지막 부분만 표시
+                let display = if full.len() > available_width {
+                    format!("…{}", &full[full.len() - available_width + 1..])
+                } else {
+                    full
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!(" {display}"), Style::default().fg(Color::White)),
+                ]))
+            })
+            .collect();
+
+        let mut state = ListState::default();
+        if count > 0 {
+            state.select(Some(app.path_clipboard_idx.min(count - 1)));
+        }
+
+        let inner = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Magenta)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        f.render_stateful_widget(list, inner[0], &mut state);
+
+        let hint = Line::from(vec![
+            Span::styled(" Enter ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled(" 선택  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" d ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" 삭제  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Esc ", Style::default().fg(Color::DarkGray)),
+            Span::raw(" 닫기"),
+        ]);
+        f.render_widget(Paragraph::new(hint), inner[1]);
+    }
+
     /// 도움말 오버레이
     fn render_help_overlay(f: &mut Frame, _app: &App) {
         use ratatui::{
@@ -242,6 +324,10 @@ impl AppLayout {
             Line::from("  Space     전체화면 뷰어"),
             Line::from("  PageUp    미리보기 위로"),
             Line::from("  PageDown  미리보기 아래로"),
+            Line::from(""),
+            Line::from("  ── 경로 클립보드 ────────────────"),
+            Line::from("  y         현재 항목 경로 저장"),
+            Line::from("  (파일관리 복사/이동) Tab  경로목록 열기"),
             Line::from(""),
             Line::from("  ── 즐겨찾기 ──────────────────"),
             Line::from("  b         현재폴더 추가/제거"),
@@ -370,7 +456,7 @@ impl AppLayout {
 }
 
 /// 절대 크기로 중앙 정렬 사각형 계산
-fn centered_rect_abs(width: u16, height: u16, r: Rect) -> Rect {
+pub fn centered_rect_abs(width: u16, height: u16, r: Rect) -> Rect {
     let x = r.x + r.width.saturating_sub(width) / 2;
     let y = r.y + r.height.saturating_sub(height) / 2;
     Rect {

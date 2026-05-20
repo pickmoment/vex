@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, FmOp};
+use crate::ui::layout::centered_rect_abs;
 
 const MENU_ITEMS: &[(&str, &str, &str)] = &[
     ("복사", "대상 경로로 복사", "c"),
@@ -143,6 +144,8 @@ fn render_input(f: &mut Frame, app: &App, file_name: &str) {
         Some(FmOp::Move)   => ("이동", "대상 경로"),
         _ => ("", ""),
     };
+    let show_tab_hint = matches!(app.fm_operation, Some(FmOp::Copy) | Some(FmOp::Move))
+        && !app.path_clipboard.is_empty();
 
     let area = centered_rect_abs(64, 11, f.area());
     f.render_widget(Clear, area);
@@ -184,22 +187,20 @@ fn render_input(f: &mut Frame, app: &App, file_name: &str) {
 
     f.render_widget(Paragraph::new(lines).block(block), inner[0]);
 
-    let hint = Line::from(vec![
+    let mut hint_spans = vec![
         Span::styled(" Enter ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
         Span::styled(" 확인  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Esc ", Style::default().fg(Color::DarkGray)),
-        Span::raw("메뉴로"),
-    ]);
+    ];
+    if show_tab_hint {
+        hint_spans.push(Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)));
+        hint_spans.push(Span::styled(
+            format!(" 경로목록({})  ", app.path_clipboard.len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    hint_spans.push(Span::styled(" Esc ", Style::default().fg(Color::DarkGray)));
+    hint_spans.push(Span::raw("메뉴로"));
+    let hint = Line::from(hint_spans);
     f.render_widget(Paragraph::new(hint), inner[1]);
 }
 
-fn centered_rect_abs(width: u16, height: u16, r: Rect) -> Rect {
-    let x = r.x + r.width.saturating_sub(width) / 2;
-    let y = r.y + r.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width: width.min(r.width),
-        height: height.min(r.height),
-    }
-}

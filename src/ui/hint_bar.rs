@@ -52,6 +52,7 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("←", "상위"),
             ("Space", "뷰어"),
             ("m", "파일관리"),
+            ("y", "경로복사"),
             ("b", "즐겨찾기"),
             ("/", "검색"),
             ("r", "새로고침"),
@@ -104,8 +105,21 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         AppMode::FileManager => match app.fm_operation {
             None => vec![("↑↓", "이동"), ("Enter", "선택"), ("Esc/q", "취소")],
             Some(FmOp::Delete) => vec![("y", "삭제확인"), ("n/Esc", "취소")],
-            Some(_) => vec![("Enter", "확인"), ("Esc", "메뉴로"), ("Backspace", "지우기")],
+            Some(FmOp::Rename) => vec![("Enter", "확인"), ("Esc", "메뉴로"), ("Backspace", "지우기")],
+            Some(_) => {
+                if !app.path_clipboard.is_empty() {
+                    vec![("Enter", "확인"), ("Tab", "경로목록"), ("Esc", "메뉴로"), ("Backspace", "지우기")]
+                } else {
+                    vec![("Enter", "확인"), ("Esc", "메뉴로"), ("Backspace", "지우기")]
+                }
+            }
         },
+        AppMode::PathClipboard => vec![
+            ("↑↓", "이동"),
+            ("Enter", "선택"),
+            ("d", "삭제"),
+            ("Esc", "닫기"),
+        ],
     }
 }
 

@@ -653,11 +653,6 @@ fn diff_line_to_tui_h(line: &str, h_scroll: usize) -> Line<'static> {
     Line::from(Span::styled(display, Style::default().fg(color)))
 }
 
-fn diff_line_to_tui(line: &str) -> Line<'static> {
-    diff_line_to_tui_h(line, 0)
-}
-
-
 fn staged_status_color(c: char) -> Color {
     match c {
         'A' => Color::Green,
