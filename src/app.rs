@@ -343,9 +343,7 @@ impl App {
                 self.refresh_file_list();
             }
             KeyCode::Char('y') => {
-                if let Some(path) = self.selected_path().cloned() {
-                    self.add_to_path_clipboard(path);
-                }
+                self.toggle_path_clipboard();
             }
             KeyCode::Char('m') => {
                 if self.selected_path().is_some() {
@@ -1519,9 +1517,15 @@ impl App {
     }
 
     /// 경로를 클립보드에 추가 (중복 제거)
-    fn add_to_path_clipboard(&mut self, path: PathBuf) {
-        if !self.path_clipboard.contains(&path) {
-            self.path_clipboard.push(path);
+    fn toggle_path_clipboard(&mut self) {
+        let dir = self.current_dir.clone();
+        if let Some(pos) = self.path_clipboard.iter().position(|p| p == &dir) {
+            self.path_clipboard.remove(pos);
+            if self.path_clipboard_idx > 0 && self.path_clipboard_idx >= self.path_clipboard.len() {
+                self.path_clipboard_idx = self.path_clipboard.len().saturating_sub(1);
+            }
+        } else {
+            self.path_clipboard.push(dir);
         }
     }
 

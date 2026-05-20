@@ -220,10 +220,13 @@ impl AppLayout {
         };
 
         let is_focused = app.focused_panel == FocusedPanel::PathClipboard;
+        let is_current_saved = app.path_clipboard.contains(&app.current_dir);
         let border_color = if is_focused { Color::Magenta } else { Color::DarkGray };
 
         let title = if is_focused {
             " 경로 클립보드 [Tab] "
+        } else if is_current_saved {
+            " ★ 경로 클립보드 "
         } else {
             " 경로 클립보드 "
         };
@@ -239,19 +242,20 @@ impl AppLayout {
             .iter()
             .map(|p| {
                 let full = p.display().to_string();
+                let is_current = p == &app.current_dir;
                 let display = if full.len() > avail_w {
                     format!("…{}", &full[full.len().saturating_sub(avail_w - 1)..])
                 } else {
                     full
                 };
-                let is_dir = p.is_dir();
-                let style = if is_dir {
-                    Style::default().fg(Color::Cyan)
+                let style = if is_current {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(Color::Cyan)
                 };
+                let prefix = if is_current { "★ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!(" {display}"), style),
+                    Span::styled(format!("{prefix}{display}"), style),
                 ]))
             })
             .collect();
