@@ -1129,29 +1129,44 @@ impl App {
             return Ok(());
         }
 
-        // Copy/Move 시 대상 경로가 이미 존재하면 덮어쓰기 확인
         let op = self.fm_operation.clone();
-        if matches!(op, Some(FmOp::Copy) | Some(FmOp::Move)) {
+
+        // Copy/Move: 대상이 디렉토리면 원본 파일명을 붙여 하위 경로로 해소
+        let resolved = if matches!(op, Some(FmOp::Copy) | Some(FmOp::Move)) {
             let dst = std::path::PathBuf::from(&input);
-            if dst.exists() {
-                self.fm_overwrite_target = Some(dst);
-                return Ok(());
+            if dst.is_dir() {
+                if let Some(name) = src.file_name() {
+                    dst.join(name)
+                } else {
+                    dst
+                }
+            } else {
+                dst
             }
+        } else {
+            std::path::PathBuf::from(&input)
+        };
+
+        // 해소된 경로가 이미 존재하면 덮어쓰기 확인
+        if matches!(op, Some(FmOp::Copy) | Some(FmOp::Move)) && resolved.exists() {
+            self.fm_overwrite_target = Some(resolved);
+            return Ok(());
         }
 
         let result = match op {
             Some(FmOp::Rename) => crate::fs::ops::rename_file(&src, &input).map(|_| ()),
-            Some(FmOp::Copy) => {
-                crate::fs::ops::copy_file(&src, &std::path::PathBuf::from(&input))
-            }
-            Some(FmOp::Move) => {
-                crate::fs::ops::move_file(&src, &std::path::PathBuf::from(&input))
-            }
+            Some(FmOp::Copy) => crate::fs::ops::copy_file(&src, &resolved),
+            Some(FmOp::Move) => crate::fs::ops::move_file(&src, &resolved),
             Some(FmOp::NewDir) => {
                 crate::fs::ops::create_dir(&self.current_dir, &input).map(|_| ())
             }
             _ => return Ok(()),
         };
+
+        let display_name = resolved.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&input)
+            .to_string();
 
         match result {
             Ok(_) => {
@@ -1162,7 +1177,7 @@ impl App {
                     Some(FmOp::NewDir) => "생성됨",
                     _ => "완료됨",
                 };
-                self.set_status_success(format!("{op_label}: {input}"));
+                self.set_status_success(format!("{op_label}: {display_name}"));
                 self.fm_operation = None;
                 self.fm_error = None;
                 self.mode = AppMode::FileList;
