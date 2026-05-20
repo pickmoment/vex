@@ -17,6 +17,30 @@ pub struct GitStatus {
     pub unstaged: Vec<GitFile>,
     /// 파일 상대경로 → (staged_status, worktree_status)
     pub file_map: HashMap<String, (char, char)>,
+    /// 트래킹 원격 브랜치 (e.g. "origin/main"), 없으면 None
+    pub upstream: Option<String>,
+    /// 로컬이 원격보다 앞선 커밋 수 (push 필요)
+    pub ahead: u32,
+    /// 로컬이 원격보다 뒤처진 커밋 수 (pull 필요)
+    pub behind: u32,
+    /// 원격 URL (upstream 원격의 fetch URL)
+    pub remote_url: Option<String>,
+}
+
+/// SSH/HTTPS URL을 간결하게 표시 (호스트:경로, .git 제거)
+fn abbreviate_remote_url(url: &str) -> String {
+    // ssh: git@github.com:user/repo.git → github.com:user/repo
+    if let Some(rest) = url.strip_prefix("git@") {
+        let s = rest.trim_end_matches(".git");
+        return s.replacen(':', "/", 1);
+    }
+    // https/http: https://github.com/user/repo.git → github.com/user/repo
+    for prefix in &["https://", "http://"] {
+        if let Some(rest) = url.strip_prefix(prefix) {
+            return rest.trim_end_matches(".git").to_string();
+        }
+    }
+    url.to_string()
 }
 
 pub fn find_git_root(dir: &Path) -> Option<PathBuf> {
@@ -88,7 +112,49 @@ pub fn get_status(dir: &Path) -> Option<GitStatus> {
         }
     }
 
-    Some(GitStatus { branch, root, staged, unstaged, file_map })
+    // porcelain v2 --branch: upstream / ahead-behind 파싱
+    let branch_info = Command::new("git")
+        .args(["-C", root_str, "status", "--porcelain=v2", "--branch"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+
+    let mut upstream: Option<String> = None;
+    let mut ahead: u32 = 0;
+    let mut behind: u32 = 0;
+
+    for line in branch_info.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.upstream ") {
+            let u = rest.trim().to_string();
+            if u != "(null)" {
+                upstream = Some(u);
+            }
+        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() >= 2 {
+                ahead = parts[0].trim_start_matches('+').parse().unwrap_or(0);
+                behind = parts[1].trim_start_matches('-').parse().unwrap_or(0);
+            }
+        }
+    }
+
+    // 원격 URL: upstream에서 remote 이름 추출 후 fetch URL 조회
+    let remote_url = upstream.as_ref().and_then(|u| {
+        let remote = u.split('/').next()?;
+        let out = Command::new("git")
+            .args(["-C", root_str, "remote", "get-url", remote])
+            .output().ok()?;
+        if out.status.success() {
+            String::from_utf8(out.stdout).ok()
+                .map(|s| abbreviate_remote_url(s.trim()))
+        } else {
+            None
+        }
+    });
+
+    Some(GitStatus { branch, root, staged, unstaged, file_map, upstream, ahead, behind, remote_url })
 }
 
 pub fn get_diff(root: &Path, path: &str, staged: bool) -> Vec<String> {

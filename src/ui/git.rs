@@ -32,34 +32,60 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let (branch, staged_count, unstaged_count) = if let Some(ref status) = app.git.status {
-        (
-            status.branch.as_str(),
-            status.staged.len(),
-            status.unstaged.len(),
-        )
-    } else {
-        ("—", 0, 0)
-    };
-
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" Git", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw(": "),
-        Span::styled(branch, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(
-            format!("스테이징 {staged_count}"),
+    ];
+
+    if let Some(ref status) = app.git.status {
+        spans.push(Span::styled(
+            status.branch.clone(),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+
+        // 원격 트래킹 브랜치 + ahead/behind
+        if let Some(ref upstream) = status.upstream {
+            spans.push(Span::styled(upstream.clone(), Style::default().fg(Color::Blue)));
+            if status.ahead == 0 && status.behind == 0 {
+                spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
+            } else {
+                spans.push(Span::raw(" "));
+                if status.ahead > 0 {
+                    spans.push(Span::styled(
+                        format!("↑{}", status.ahead),
+                        Style::default().fg(Color::Green),
+                    ));
+                }
+                if status.behind > 0 {
+                    spans.push(Span::styled(
+                        format!("↓{}", status.behind),
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+            }
+            spans.push(Span::raw("  "));
+        } else {
+            spans.push(Span::styled("원격없음  ", Style::default().fg(Color::DarkGray)));
+        }
+
+        spans.push(Span::styled(
+            format!("스테이징 {}", status.staged.len()),
             Style::default().fg(Color::Green),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("변경 {unstaged_count}"),
+        ));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("변경 {}", status.unstaged.len()),
             Style::default().fg(Color::Yellow),
-        ),
-        Span::raw("  "),
-        Span::styled("[g] git 관리", Style::default().fg(Color::DarkGray)),
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+        ));
+    } else {
+        spans.push(Span::styled("—", Style::default().fg(Color::DarkGray)));
+    }
+
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled("[g] git 관리", Style::default().fg(Color::DarkGray)));
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_content(f: &mut Frame, area: Rect, app: &mut App) {
@@ -250,20 +276,70 @@ fn render_right_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn render_diff_hint(f: &mut Frame, area: Rect, _app: &App) {
+fn render_diff_hint(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
-        .title(" diff ")
+        .title(" diff / 원격 정보 ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let para = Paragraph::new(vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  (변경 파일 없음)",
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+
+    if let Some(ref status) = app.git.status {
+        // 원격 URL
+        match &status.remote_url {
+            Some(url) => {
+                lines.push(Line::from(vec![
+                    Span::styled("  원격  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(url.clone(), Style::default().fg(Color::Cyan)),
+                ]));
+            }
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "  원격 저장소 없음",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        // 트래킹 브랜치 + 동기화 상태
+        if let Some(ref upstream) = status.upstream {
+            lines.push(Line::from(vec![
+                Span::styled("  트래킹 ", Style::default().fg(Color::DarkGray)),
+                Span::styled(upstream.clone(), Style::default().fg(Color::Blue)),
+            ]));
+
+            lines.push(Line::from(""));
+
+            let (sync_text, sync_color) = if status.ahead == 0 && status.behind == 0 {
+                ("  ✓ 원격과 동기화됨".to_string(), Color::Green)
+            } else {
+                let mut parts = vec!["  ".to_string()];
+                if status.ahead > 0 {
+                    parts.push(format!("↑{} push 필요", status.ahead));
+                }
+                if status.behind > 0 {
+                    if status.ahead > 0 { parts.push("  ".to_string()); }
+                    parts.push(format!("↓{} pull 필요", status.behind));
+                }
+                (parts.join(""), Color::Yellow)
+            };
+            lines.push(Line::from(Span::styled(sync_text, Style::default().fg(sync_color))));
+        } else {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  P: push (upstream 자동 설정)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  (선택된 변경 파일 없음)",
             Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .block(block);
-    f.render_widget(para, area);
+        )));
+    }
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn render_diff_panel(f: &mut Frame, area: Rect, app: &mut App) {
