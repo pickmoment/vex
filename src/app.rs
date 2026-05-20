@@ -57,6 +57,7 @@ pub enum FmOp {
     Move,
     Rename,
     Delete,
+    NewDir,
 }
 
 /// 파일 타입 분류
@@ -172,6 +173,8 @@ pub struct App {
     pub fm_operation: Option<FmOp>,
     /// 파일 관리: 마지막 오류 메시지
     pub fm_error: Option<String>,
+    /// 파일 관리: 덮어쓰기 확인 대기 중인 대상 경로
+    pub fm_overwrite_target: Option<PathBuf>,
     /// 경로 클립보드 목록
     pub path_clipboard: Vec<PathBuf>,
     /// 경로 클립보드 선택 인덱스
@@ -246,6 +249,7 @@ impl App {
             fm_input: String::new(),
             fm_operation: None,
             fm_error: None,
+            fm_overwrite_target: None,
             path_clipboard: Vec::new(),
             path_clipboard_idx: 0,
             file_list_height: 0,
@@ -405,6 +409,10 @@ impl App {
                     self.fm_input.clear();
                     self.mode = AppMode::FileManager;
                 }
+            }
+            KeyCode::Char('n') => {
+                self.fm_start(FmOp::NewDir);
+                self.mode = AppMode::FileManager;
             }
             KeyCode::Char('g') => {
                 self.refresh_git_status();
@@ -960,6 +968,9 @@ impl App {
     }
 
     fn handle_key_file_manager(&mut self, key: KeyEvent) -> Result<()> {
+        if self.fm_overwrite_target.is_some() {
+            return self.handle_fm_overwrite_confirm(key);
+        }
         match self.fm_operation.clone() {
             None => self.handle_fm_menu(key),
             Some(FmOp::Delete) => self.handle_fm_delete(key),
@@ -967,8 +978,48 @@ impl App {
         }
     }
 
+    fn handle_fm_overwrite_confirm(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('y') => {
+                let dst = match self.fm_overwrite_target.take() {
+                    Some(d) => d,
+                    None => return Ok(()),
+                };
+                let src = match self.selected_path().cloned() {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+                let input = dst.display().to_string();
+                let result = match self.fm_operation {
+                    Some(FmOp::Copy) => crate::fs::ops::copy_file(&src, &dst),
+                    Some(FmOp::Move) => crate::fs::ops::move_file(&src, &dst),
+                    _ => return Ok(()),
+                };
+                match result {
+                    Ok(_) => {
+                        let op_label = if self.fm_operation == Some(FmOp::Copy) { "복사됨" } else { "이동됨" };
+                        self.set_status_success(format!("{op_label}: {input}"));
+                        self.fm_operation = None;
+                        self.fm_error = None;
+                        self.mode = AppMode::FileList;
+                        self.fm_refresh_file_list();
+                    }
+                    Err(e) => {
+                        self.fm_error = Some(e.to_string());
+                        self.set_status_error(format!("실패: {e}"));
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.fm_overwrite_target = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_fm_menu(&mut self, key: KeyEvent) -> Result<()> {
-        const MENU_LEN: usize = 4;
+        const MENU_LEN: usize = 5;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.mode = AppMode::FileList;
@@ -983,12 +1034,14 @@ impl App {
             KeyCode::Char('v') => self.fm_start(FmOp::Move),
             KeyCode::Char('r') => self.fm_start(FmOp::Rename),
             KeyCode::Char('d') => self.fm_start(FmOp::Delete),
+            KeyCode::Char('n') => self.fm_start(FmOp::NewDir),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                 let op = match self.fm_menu_idx {
                     0 => FmOp::Copy,
                     1 => FmOp::Move,
                     2 => FmOp::Rename,
-                    _ => FmOp::Delete,
+                    3 => FmOp::Delete,
+                    _ => FmOp::NewDir,
                 };
                 self.fm_start(op);
             }
@@ -1004,6 +1057,7 @@ impl App {
             FmOp::Move => 1,
             FmOp::Rename => 2,
             FmOp::Delete => 3,
+            FmOp::NewDir => 4,
         };
         let input = match op {
             FmOp::Rename => self
@@ -1015,7 +1069,7 @@ impl App {
             FmOp::Copy | FmOp::Move => {
                 format!("{}/", self.current_dir.display())
             }
-            FmOp::Delete => String::new(),
+            FmOp::Delete | FmOp::NewDir => String::new(),
         };
         self.fm_input = input;
         self.fm_operation = Some(op);
@@ -1084,7 +1138,16 @@ impl App {
             return Ok(());
         }
 
+        // Copy/Move 시 대상 경로가 이미 존재하면 덮어쓰기 확인
         let op = self.fm_operation.clone();
+        if matches!(op, Some(FmOp::Copy) | Some(FmOp::Move)) {
+            let dst = std::path::PathBuf::from(&input);
+            if dst.exists() {
+                self.fm_overwrite_target = Some(dst);
+                return Ok(());
+            }
+        }
+
         let result = match op {
             Some(FmOp::Rename) => crate::fs::ops::rename_file(&src, &input).map(|_| ()),
             Some(FmOp::Copy) => {
@@ -1092,6 +1155,9 @@ impl App {
             }
             Some(FmOp::Move) => {
                 crate::fs::ops::move_file(&src, &std::path::PathBuf::from(&input))
+            }
+            Some(FmOp::NewDir) => {
+                crate::fs::ops::create_dir(&self.current_dir, &input).map(|_| ())
             }
             _ => return Ok(()),
         };
@@ -1102,6 +1168,7 @@ impl App {
                     Some(FmOp::Rename) => "이름 변경됨",
                     Some(FmOp::Copy) => "복사됨",
                     Some(FmOp::Move) => "이동됨",
+                    Some(FmOp::NewDir) => "생성됨",
                     _ => "완료됨",
                 };
                 self.set_status_success(format!("{op_label}: {input}"));

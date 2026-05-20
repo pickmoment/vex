@@ -14,9 +14,15 @@ const MENU_ITEMS: &[(&str, &str, &str)] = &[
     ("이동", "대상 경로로 이동", "v"),
     ("이름 변경", "현재 디렉토리에서 이름 변경", "r"),
     ("삭제", "파일/디렉토리 삭제", "d"),
+    ("새 폴더", "현재 디렉토리에 새 폴더 생성", "n"),
 ];
 
 pub fn render(f: &mut Frame, app: &App) {
+    if app.fm_overwrite_target.is_some() {
+        render_overwrite_confirm(f, app);
+        return;
+    }
+
     let file_name = app
         .selected_path()
         .and_then(|p| p.file_name())
@@ -93,7 +99,7 @@ fn render_menu(f: &mut Frame, app: &App, file_name: &str) {
 }
 
 fn render_delete_confirm(f: &mut Frame, app: &App, file_name: &str) {
-    let area = centered_rect_abs(54, 10, f.area());
+    let area = centered_rect_abs(58, 11, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
@@ -106,6 +112,16 @@ fn render_delete_confirm(f: &mut Frame, app: &App, file_name: &str) {
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
+    // 대상이 디렉토리면 항목 수 계산
+    let dir_info = app.selected_path().and_then(|p| {
+        if p.is_dir() {
+            let count = std::fs::read_dir(p).map(|r| r.count()).unwrap_or(0);
+            Some(count)
+        } else {
+            None
+        }
+    });
+
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
@@ -117,8 +133,14 @@ fn render_delete_confirm(f: &mut Frame, app: &App, file_name: &str) {
             format!("  {file_name}"),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )),
-        Line::from(""),
     ];
+    if let Some(count) = dir_info {
+        lines.push(Line::from(Span::styled(
+            format!("  (디렉토리 — {count}개 항목과 모든 하위 파일 삭제)"),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    lines.push(Line::from(""));
     if let Some(ref err) = app.fm_error {
         lines.push(Line::from(Span::styled(
             format!("  오류: {err}"),
@@ -142,6 +164,7 @@ fn render_input(f: &mut Frame, app: &App, file_name: &str) {
         Some(FmOp::Rename) => ("이름 변경", "새 이름"),
         Some(FmOp::Copy)   => ("복사", "대상 경로"),
         Some(FmOp::Move)   => ("이동", "대상 경로"),
+        Some(FmOp::NewDir) => ("새 폴더", "폴더 이름"),
         _ => ("", ""),
     };
     let show_tab_hint = matches!(app.fm_operation, Some(FmOp::Copy) | Some(FmOp::Move))
@@ -204,3 +227,47 @@ fn render_input(f: &mut Frame, app: &App, file_name: &str) {
     f.render_widget(Paragraph::new(hint), inner[1]);
 }
 
+fn render_overwrite_confirm(f: &mut Frame, app: &App) {
+    let dst_str = app
+        .fm_overwrite_target
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+
+    let area = centered_rect_abs(64, 10, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" 덮어쓰기 확인 ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = ratatui::layout::Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  ⚠  대상이 이미 존재합니다. 덮어쓰시겠습니까?",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {dst_str}"),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    f.render_widget(Paragraph::new(lines).block(block), inner[0]);
+
+    let hint = Line::from(vec![
+        Span::styled(" y ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" 덮어쓰기  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" n/Esc ", Style::default().fg(Color::DarkGray)),
+        Span::raw("취소"),
+    ]);
+    f.render_widget(Paragraph::new(hint), inner[1]);
+}
