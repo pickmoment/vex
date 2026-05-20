@@ -567,219 +567,206 @@ impl App {
 
     /// Git 관리 모드 키 처리
     fn handle_key_git(&mut self, key: KeyEvent) -> Result<()> {
-        // 커밋 메시지 입력 중
-        if self.git.is_committing {
-            match key.code {
-                KeyCode::Esc => {
+        // ORDER MATTERS — do not reorder:
+        // 1) committing input absorbs all keys
+        if self.git.is_committing { return self.handle_git_commit_input(key); }
+        // 2) git-wide common keys ([ ] w f) — early return if handled
+        if self.handle_git_common_keys(key)? { return Ok(()); }
+        // 3) submode dispatch
+        if self.git.diff_fullscreen { return self.handle_git_fullscreen(key); }
+        if self.git.log_focused && self.git.log_file_focused { return self.handle_git_log_files(key); }
+        if self.git.log_focused { return self.handle_git_log(key); }
+        self.handle_git_files(key)
+    }
+
+    fn handle_git_commit_input(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.git.is_committing = false;
+                self.git.commit_input.clear();
+            }
+            KeyCode::Enter => {
+                if !self.git.commit_input.is_empty() {
+                    if let Some(status) = &self.git.status {
+                        let root = status.root.clone();
+                        let msg = self.git.commit_input.clone();
+                        match crate::git::commit_changes(&root, &msg) {
+                            Ok(()) => self.set_status_success("커밋됨"),
+                            Err(e) => self.set_status_error(e),
+                        }
+                    }
                     self.git.is_committing = false;
                     self.git.commit_input.clear();
+                    { let root = self.current_dir.clone(); self.git.refresh(&root); }
+                    self.git.load_diff();
                 }
-                KeyCode::Enter => {
-                    if !self.git.commit_input.is_empty() {
-                        if let Some(status) = &self.git.status {
-                            let root = status.root.clone();
-                            let msg = self.git.commit_input.clone();
-                            match crate::git::commit_changes(&root, &msg) {
-                                Ok(()) => self.set_status_success("커밋됨"),
-                                Err(e) => self.set_status_error(e),
-                            }
-                        }
-                        self.git.is_committing = false;
-                        self.git.commit_input.clear();
-                        { let root = self.current_dir.clone(); self.git.refresh(&root); }
-                        self.git.load_diff();
-                    }
-                }
-                KeyCode::Backspace => { self.git.commit_input.pop(); }
-                KeyCode::Char(c) => { self.git.commit_input.push(c); }
-                _ => {}
             }
-            return Ok(());
+            KeyCode::Backspace => { self.git.commit_input.pop(); }
+            KeyCode::Char(c) => { self.git.commit_input.push(c); }
+            _ => {}
         }
+        Ok(())
+    }
 
-        // diff 전체화면 모드
-        if self.git.diff_fullscreen {
-            let has_commit_diff = !self.git.commit_show.is_empty();
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('f') => {
-                    self.git.diff_fullscreen = false;
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if has_commit_diff {
-                        self.git.commit_show_scroll =
-                            self.git.commit_show_scroll.saturating_sub(1);
-                    } else {
-                        self.git.diff_scroll = self.git.diff_scroll.saturating_sub(1);
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if has_commit_diff {
-                        self.git.commit_show_scroll += 1;
-                    } else {
-                        self.git.diff_scroll += 1;
-                    }
-                }
-                KeyCode::PageUp => {
-                    let n = self.git.diff_panel_height.max(1);
-                    if has_commit_diff {
-                        self.git.commit_show_scroll =
-                            self.git.commit_show_scroll.saturating_sub(n);
-                    } else {
-                        self.git.diff_scroll = self.git.diff_scroll.saturating_sub(n);
-                    }
-                }
-                KeyCode::PageDown | KeyCode::Char(' ') => {
-                    let n = self.git.diff_panel_height.max(1);
-                    if has_commit_diff {
-                        self.git.commit_show_scroll += n;
-                    } else {
-                        self.git.diff_scroll += n;
-                    }
-                }
-                KeyCode::Left | KeyCode::Char('[') => {
-                    if !self.git.diff_wrap {
-                        self.git.diff_h_scroll = self.git.diff_h_scroll.saturating_sub(4);
-                    }
-                }
-                KeyCode::Right | KeyCode::Char(']') => {
-                    if !self.git.diff_wrap {
-                        self.git.diff_h_scroll += 4;
-                    }
-                }
-                KeyCode::Char('w') => {
-                    self.git.diff_wrap = !self.git.diff_wrap;
-                    if self.git.diff_wrap {
-                        self.git.diff_h_scroll = 0;
-                    }
-                }
-                _ => {}
-            }
-            return Ok(());
-        }
-
-        // 범용 diff 조작키 (모드 무관)
+    fn handle_git_common_keys(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Char('[') => {
                 if !self.git.diff_wrap {
                     self.git.diff_h_scroll = self.git.diff_h_scroll.saturating_sub(4);
                 }
-                return Ok(());
+                Ok(true)
             }
             KeyCode::Char(']') => {
                 if !self.git.diff_wrap {
                     self.git.diff_h_scroll += 4;
                 }
-                return Ok(());
+                Ok(true)
             }
             KeyCode::Char('w') => {
                 self.git.diff_wrap = !self.git.diff_wrap;
                 if self.git.diff_wrap {
                     self.git.diff_h_scroll = 0;
                 }
-                return Ok(());
+                Ok(true)
             }
             KeyCode::Char('f') => {
                 let has_diff = !self.git.diff.is_empty() || !self.git.commit_show.is_empty();
                 if has_diff {
                     self.git.diff_fullscreen = true;
                 }
-                return Ok(());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn handle_git_fullscreen(&mut self, key: KeyEvent) -> Result<()> {
+        let has_commit_diff = !self.git.commit_show.is_empty();
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('f') => {
+                self.git.diff_fullscreen = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if has_commit_diff {
+                    self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_sub(1);
+                } else {
+                    self.git.diff_scroll = self.git.diff_scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if has_commit_diff {
+                    self.git.commit_show_scroll += 1;
+                } else {
+                    self.git.diff_scroll += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                let n = self.git.diff_panel_height.max(1);
+                if has_commit_diff {
+                    self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_sub(n);
+                } else {
+                    self.git.diff_scroll = self.git.diff_scroll.saturating_sub(n);
+                }
+            }
+            KeyCode::PageDown | KeyCode::Char(' ') => {
+                let n = self.git.diff_panel_height.max(1);
+                if has_commit_diff {
+                    self.git.commit_show_scroll += n;
+                } else {
+                    self.git.diff_scroll += n;
+                }
             }
             _ => {}
         }
+        Ok(())
+    }
 
-        // 커밋 변경 파일 포커스 상태
-        if self.git.log_focused && self.git.log_file_focused {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
-                    self.git.log_file_focused = false;
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if self.git.commit_file_idx > 0 {
-                        self.git.commit_file_idx -= 1;
-                        self.git.load_commit_file_diff();
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.git.commit_file_idx + 1 < self.git.commit_files.len() {
-                        self.git.commit_file_idx += 1;
-                        self.git.load_commit_file_diff();
-                    }
-                }
-                KeyCode::Enter | KeyCode::Char('d') => {
+    fn handle_git_log_files(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                self.git.log_file_focused = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.git.commit_file_idx > 0 {
+                    self.git.commit_file_idx -= 1;
                     self.git.load_commit_file_diff();
                 }
-                KeyCode::PageUp => {
-                    let n = self.git.diff_panel_height.max(1);
-                    self.git.commit_show_scroll =
-                        self.git.commit_show_scroll.saturating_sub(n);
-                }
-                KeyCode::PageDown => {
-                    let n = self.git.diff_panel_height.max(1);
-                    self.git.commit_show_scroll =
-                        self.git.commit_show_scroll.saturating_add(n);
-                }
-                KeyCode::Char('L') => {
-                    self.git.show_log = false;
-                    self.git.log_focused = false;
-                    self.git.log_file_focused = false;
-                }
-                _ => {}
             }
-            return Ok(());
-        }
-
-        // 커밋 목록 포커스 상태
-        if self.git.log_focused {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
-                    self.git.log_focused = false;
-                    self.git.log_file_focused = false;
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.git.commit_file_idx + 1 < self.git.commit_files.len() {
+                    self.git.commit_file_idx += 1;
+                    self.git.load_commit_file_diff();
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if self.git.log_idx > 0 {
-                        self.git.log_idx -= 1;
-                        self.git.log_file_focused = false;
-                        self.git.load_commit_show();
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.git.log_idx + 1 < self.git.log.len() {
-                        self.git.log_idx += 1;
-                        self.git.log_file_focused = false;
-                        self.git.load_commit_show();
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('d') => {
-                    if !self.git.commit_files.is_empty() {
-                        self.git.log_file_focused = true;
-                        self.git.commit_file_idx = 0;
-                        self.git.load_commit_file_diff();
-                    } else {
-                        self.git.load_commit_show();
-                    }
-                }
-                KeyCode::PageUp => {
-                    let n = self.git.diff_panel_height.max(1);
-                    self.git.commit_show_scroll =
-                        self.git.commit_show_scroll.saturating_sub(n);
-                }
-                KeyCode::PageDown => {
-                    let n = self.git.diff_panel_height.max(1);
-                    self.git.commit_show_scroll =
-                        self.git.commit_show_scroll.saturating_add(n);
-                }
-                KeyCode::Char('L') => {
-                    self.git.show_log = false;
-                    self.git.log_focused = false;
-                    self.git.log_file_focused = false;
-                }
-                _ => {}
             }
-            return Ok(());
+            KeyCode::Enter | KeyCode::Char('d') => {
+                self.git.load_commit_file_diff();
+            }
+            KeyCode::PageUp => {
+                let n = self.git.diff_panel_height.max(1);
+                self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_sub(n);
+            }
+            KeyCode::PageDown => {
+                let n = self.git.diff_panel_height.max(1);
+                self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_add(n);
+            }
+            KeyCode::Char('L') => {
+                self.git.show_log = false;
+                self.git.log_focused = false;
+                self.git.log_file_focused = false;
+            }
+            _ => {}
         }
+        Ok(())
+    }
 
-        // 파일 패널 포커스 상태 (기본)
+    fn handle_git_log(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                self.git.log_focused = false;
+                self.git.log_file_focused = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.git.log_idx > 0 {
+                    self.git.log_idx -= 1;
+                    self.git.log_file_focused = false;
+                    self.git.load_commit_show();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.git.log_idx + 1 < self.git.log.len() {
+                    self.git.log_idx += 1;
+                    self.git.log_file_focused = false;
+                    self.git.load_commit_show();
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('d') => {
+                if !self.git.commit_files.is_empty() {
+                    self.git.log_file_focused = true;
+                    self.git.commit_file_idx = 0;
+                    self.git.load_commit_file_diff();
+                } else {
+                    self.git.load_commit_show();
+                }
+            }
+            KeyCode::PageUp => {
+                let n = self.git.diff_panel_height.max(1);
+                self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_sub(n);
+            }
+            KeyCode::PageDown => {
+                let n = self.git.diff_panel_height.max(1);
+                self.git.commit_show_scroll = self.git.commit_show_scroll.saturating_add(n);
+            }
+            KeyCode::Char('L') => {
+                self.git.show_log = false;
+                self.git.log_focused = false;
+                self.git.log_file_focused = false;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_git_files(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.mode = AppMode::FileList;
