@@ -44,6 +44,14 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("Tab/Esc", "나가기"),
         ];
     }
+    if app.mode == AppMode::FileList && app.focused_panel == FocusedPanel::PathClipboard {
+        return vec![
+            ("↑↓", "이동"),
+            ("Enter/→", "디렉토리이동"),
+            ("d", "삭제"),
+            ("Tab/Esc", "나가기"),
+        ];
+    }
     match app.mode {
         AppMode::FileList => vec![
             ("↑↓", "이동"),

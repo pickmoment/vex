@@ -108,7 +108,7 @@ impl AppLayout {
         f.render_widget(Paragraph::new(line), area);
     }
 
-    /// 즐겨찾기 패널
+    /// 좌측 패널: 즐겨찾기 + 경로 클립보드
     fn render_bookmarks_panel(f: &mut Frame, area: Rect, app: &mut App) {
         use ratatui::{
             style::{Color, Modifier, Style},
@@ -116,14 +116,30 @@ impl AppLayout {
             widgets::{Block, Borders, List, ListItem, ListState},
         };
 
-        app.bookmarks_area = Some(area);
+        let clip_count = app.path_clipboard.len();
 
+        // 경로 클립보드가 있으면 하단에 별도 영역을 할당
+        let (book_area, clip_area) = if clip_count > 0 && area.height > 6 {
+            let clip_h = (clip_count as u16 + 2).min(area.height / 2);
+            let book_h = area.height.saturating_sub(clip_h);
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(book_h), Constraint::Length(clip_h)])
+                .split(area);
+            (parts[0], Some(parts[1]))
+        } else {
+            (area, None)
+        };
+
+        app.bookmarks_area = Some(book_area);
+
+        // ── 즐겨찾기 패널 ──
         let is_focused = app.focused_panel == FocusedPanel::Bookmarks;
         let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
         let is_current_bookmarked = app.config.bookmarks.contains(&app.current_dir);
 
         let title = if is_focused {
-            " 즐겨찾기 [Tab:나가기] "
+            " 즐겨찾기 [Tab] "
         } else if is_current_bookmarked {
             " ★ 즐겨찾기 "
         } else {
@@ -150,40 +166,108 @@ impl AppLayout {
                 )),
             ])
             .block(block);
-            f.render_widget(para, area);
-            return;
+            f.render_widget(para, book_area);
+        } else {
+            let items: Vec<ListItem> = app
+                .config
+                .bookmarks
+                .iter()
+                .map(|p| {
+                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                    let is_current = p == &app.current_dir;
+                    let style = if is_current {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let prefix = if is_current { "★ " } else { "  " };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{prefix}{name}"), style),
+                    ]))
+                })
+                .collect();
+
+            let mut state = ListState::default();
+            if is_focused {
+                state.select(Some(app.bookmark_index.min(app.config.bookmarks.len() - 1)));
+            }
+
+            let list = List::new(items)
+                .block(block)
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Blue)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▶");
+
+            f.render_stateful_widget(list, book_area, &mut state);
         }
 
+        // ── 경로 클립보드 패널 ──
+        if let Some(clip_area) = clip_area {
+            Self::render_clipboard_sidebar(f, clip_area, app);
+        }
+    }
+
+    /// 경로 클립보드 사이드바 패널
+    fn render_clipboard_sidebar(f: &mut Frame, area: Rect, app: &App) {
+        use ratatui::{
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, ListState},
+        };
+
+        let is_focused = app.focused_panel == FocusedPanel::PathClipboard;
+        let border_color = if is_focused { Color::Magenta } else { Color::DarkGray };
+
+        let title = if is_focused {
+            " 경로 클립보드 [Tab] "
+        } else {
+            " 경로 클립보드 "
+        };
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let avail_w = area.width.saturating_sub(4) as usize;
         let items: Vec<ListItem> = app
-            .config
-            .bookmarks
+            .path_clipboard
             .iter()
             .map(|p| {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                let is_current = p == &app.current_dir;
-                let style = if is_current {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                let full = p.display().to_string();
+                let display = if full.len() > avail_w {
+                    format!("…{}", &full[full.len().saturating_sub(avail_w - 1)..])
+                } else {
+                    full
+                };
+                let is_dir = p.is_dir();
+                let style = if is_dir {
+                    Style::default().fg(Color::Cyan)
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let prefix = if is_current { "★ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{prefix}{name}"), style),
+                    Span::styled(format!(" {display}"), style),
                 ]))
             })
             .collect();
 
+        let count = app.path_clipboard.len();
         let mut state = ListState::default();
-        if is_focused {
-            state.select(Some(app.bookmark_index.min(app.config.bookmarks.len() - 1)));
+        if is_focused && count > 0 {
+            state.select(Some(app.path_clipboard_idx.min(count - 1)));
         }
 
         let list = List::new(items)
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
+                    .bg(Color::Magenta)
+                    .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶");

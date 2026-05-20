@@ -18,6 +18,7 @@ use crate::ui::status_bar::StatusMessage;
 pub enum FocusedPanel {
     FileList,
     Bookmarks,
+    PathClipboard,
 }
 
 /// 앱의 전체 모드 상태
@@ -252,6 +253,9 @@ impl App {
         if self.mode == AppMode::FileList && self.focused_panel == FocusedPanel::Bookmarks {
             return self.handle_key_bookmarks(key);
         }
+        if self.mode == AppMode::FileList && self.focused_panel == FocusedPanel::PathClipboard {
+            return self.handle_key_clipboard_panel(key);
+        }
         match self.mode {
             AppMode::FileList => self.handle_key_file_list(key),
             AppMode::Viewer => self.handle_key_viewer(key),
@@ -331,6 +335,8 @@ impl App {
             KeyCode::Tab => {
                 if !self.config.bookmarks.is_empty() {
                     self.focused_panel = FocusedPanel::Bookmarks;
+                } else if !self.path_clipboard.is_empty() {
+                    self.focused_panel = FocusedPanel::PathClipboard;
                 }
             }
             KeyCode::Char('r') => {
@@ -495,8 +501,15 @@ impl App {
     fn handle_key_bookmarks(&mut self, key: KeyEvent) -> Result<()> {
         let len = self.config.bookmarks.len();
         match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
                 self.focused_panel = FocusedPanel::FileList;
+            }
+            KeyCode::Tab => {
+                if !self.path_clipboard.is_empty() {
+                    self.focused_panel = FocusedPanel::PathClipboard;
+                } else {
+                    self.focused_panel = FocusedPanel::FileList;
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if len > 0 && self.bookmark_index > 0 {
@@ -513,6 +526,57 @@ impl App {
             }
             KeyCode::Delete | KeyCode::Char('d') => {
                 self.bookmark_delete();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// 경로 클립보드 사이드바 패널 포커스 상태의 키 처리
+    fn handle_key_clipboard_panel(&mut self, key: KeyEvent) -> Result<()> {
+        let len = self.path_clipboard.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                self.focused_panel = FocusedPanel::FileList;
+            }
+            KeyCode::Tab => {
+                self.focused_panel = FocusedPanel::FileList;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.path_clipboard_idx > 0 {
+                    self.path_clipboard_idx -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 && self.path_clipboard_idx + 1 < len {
+                    self.path_clipboard_idx += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(path) = self.path_clipboard.get(self.path_clipboard_idx).cloned() {
+                    let dir = if path.is_dir() {
+                        path
+                    } else {
+                        path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.clone())
+                    };
+                    if dir.is_dir() {
+                        self.navigate_to(dir)?;
+                    }
+                    self.focused_panel = FocusedPanel::FileList;
+                }
+            }
+            KeyCode::Char('d') => {
+                if !self.path_clipboard.is_empty() {
+                    self.path_clipboard.remove(self.path_clipboard_idx);
+                    if self.path_clipboard_idx > 0
+                        && self.path_clipboard_idx >= self.path_clipboard.len()
+                    {
+                        self.path_clipboard_idx = self.path_clipboard.len().saturating_sub(1);
+                    }
+                    if self.path_clipboard.is_empty() {
+                        self.focused_panel = FocusedPanel::FileList;
+                    }
+                }
             }
             _ => {}
         }
