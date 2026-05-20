@@ -191,14 +191,22 @@ fn render_input(f: &mut Frame, app: &App, file_name: &str) {
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                format!("  {input_label}: "),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(app.fm_input.clone(), Style::default().fg(Color::Yellow)),
-            Span::styled("█", Style::default().fg(Color::Yellow)),
-        ]),
+        {
+            let cursor = app.fm_cursor.min(app.fm_input.len());
+            let before = &app.fm_input[..cursor];
+            let after_str = &app.fm_input[cursor..];
+            let (cursor_ch, after) = if let Some(c) = after_str.chars().next() {
+                (&after_str[..c.len_utf8()], &after_str[c.len_utf8()..])
+            } else {
+                (" ", "")
+            };
+            Line::from(vec![
+                Span::styled(format!("  {input_label}: "), Style::default().fg(Color::White)),
+                Span::styled(before.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(cursor_ch.to_string(), Style::default().fg(Color::Black).bg(Color::Yellow)),
+                Span::styled(after.to_string(), Style::default().fg(Color::Yellow)),
+            ])
+        },
         Line::from(""),
     ];
     if let Some(ref err) = app.fm_error {

@@ -132,6 +132,8 @@ pub struct App {
     pub fm_menu_idx: usize,
     /// 파일 관리: 텍스트 입력 버퍼 (이름/경로)
     pub fm_input: String,
+    /// 파일 관리: 입력 커서 위치 (바이트 오프셋)
+    pub fm_cursor: usize,
     /// 파일 관리: 현재 진행 중인 작업
     pub fm_operation: Option<FmOp>,
     /// 파일 관리: 마지막 오류 메시지
@@ -189,6 +191,7 @@ impl App {
             git,
             fm_menu_idx: 0,
             fm_input: String::new(),
+            fm_cursor: 0,
             fm_operation: None,
             fm_error: None,
             fm_overwrite_target: None,
@@ -1060,6 +1063,7 @@ impl App {
             }
             FmOp::Delete | FmOp::NewDir => String::new(),
         };
+        self.fm_cursor = input.len();
         self.fm_input = input;
         self.fm_operation = Some(op);
     }
@@ -1100,7 +1104,31 @@ impl App {
                 self.fm_operation = None;
                 self.fm_error = None;
             }
-            KeyCode::Backspace => { self.fm_input.pop(); }
+            KeyCode::Left => {
+                self.fm_cursor = Self::prev_char_boundary(&self.fm_input, self.fm_cursor);
+            }
+            KeyCode::Right => {
+                self.fm_cursor = Self::next_char_boundary(&self.fm_input, self.fm_cursor);
+            }
+            KeyCode::Home => {
+                self.fm_cursor = 0;
+            }
+            KeyCode::End => {
+                self.fm_cursor = self.fm_input.len();
+            }
+            KeyCode::Backspace => {
+                if self.fm_cursor > 0 {
+                    let prev = Self::prev_char_boundary(&self.fm_input, self.fm_cursor);
+                    self.fm_input.drain(prev..self.fm_cursor);
+                    self.fm_cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if self.fm_cursor < self.fm_input.len() {
+                    let next = Self::next_char_boundary(&self.fm_input, self.fm_cursor);
+                    self.fm_input.drain(self.fm_cursor..next);
+                }
+            }
             KeyCode::Tab => {
                 // Copy/Move 에서만 경로 클립보드 오버레이 열기
                 let is_path_op = matches!(self.fm_operation, Some(FmOp::Copy) | Some(FmOp::Move));
@@ -1109,11 +1137,32 @@ impl App {
                     self.mode = AppMode::PathClipboard;
                 }
             }
-            KeyCode::Char(c) => { self.fm_input.push(c); }
+            KeyCode::Char(c) => {
+                self.fm_input.insert(self.fm_cursor, c);
+                self.fm_cursor += c.len_utf8();
+            }
             KeyCode::Enter => self.execute_fm_operation()?,
             _ => {}
         }
         Ok(())
+    }
+
+    fn prev_char_boundary(s: &str, pos: usize) -> usize {
+        if pos == 0 { return 0; }
+        let mut i = pos - 1;
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+
+    fn next_char_boundary(s: &str, pos: usize) -> usize {
+        if pos >= s.len() { return s.len(); }
+        let mut i = pos + 1;
+        while i < s.len() && !s.is_char_boundary(i) {
+            i += 1;
+        }
+        i
     }
 
     fn execute_fm_operation(&mut self) -> Result<()> {
@@ -1553,6 +1602,7 @@ impl App {
                     } else {
                         path.display().to_string()
                     };
+                    self.fm_cursor = self.fm_input.len();
                 }
                 self.mode = AppMode::FileManager;
             }
