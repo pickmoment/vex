@@ -275,7 +275,13 @@ CSV/TSV 파일을 컬럼 정렬된 인터랙티브 테이블로 표시합니다.
 | `Tab` | 스테이징 ↔ 워킹 트리 전환 |
 | `a` | 선택 파일 스테이지 |
 | `u` | 선택 파일 언스테이지 |
+| `X` | 선택 파일 변경 되돌리기 (워킹 트리, 확인 필요) |
 | `c` | 커밋 메시지 입력 후 커밋 |
+| `b` | 브랜치 패널 열기 |
+| `p` | pull (비동기) |
+| `P` | push (비동기, `--set-upstream`) |
+| `F` | fetch --all --prune (비동기) |
+| `!` | force push 확인 후 실행 (`--force-with-lease`) |
 | `r` | 상태 새로고침 |
 | `L` | 커밋 로그 패널 열기/닫기 |
 | `q` | 파일 탐색으로 돌아가기 |
@@ -316,6 +322,56 @@ CSV/TSV 파일을 컬럼 정렬된 인터랙티브 테이블로 표시합니다.
 | `f` | diff 전체화면 |
 | `↑`/`↓`, `←`/`→`, `PageUp`/`PageDown`/`Space` | 전체화면 내 스크롤 |
 | `Esc` / `f` | 전체화면 닫기 |
+
+### 브랜치 관리
+
+파일 상태 화면에서 `b` 키로 브랜치 패널을 엽니다.
+
+```
+┌─ 브랜치 (로컬 3 · 원격 2) ──────────────────────────────────────┐
+│  abc1234  ▶ * main                      Initial commit        │
+│  def5678    feature/login               Add login page        │
+│  ghi9012    bugfix/typo                 Fix typo              │
+│  ─────────────────────────────────────────────────────────    │
+│  abc1234  ◇   origin/main              Initial commit        │
+│  def5678  ◇   origin/feature/login     Add login page        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+`▶ *` 는 현재 브랜치, `◇` 는 원격 브랜치를 나타냅니다.
+
+| 키 | 동작 |
+|----|------|
+| `↑` / `↓` | 브랜치 이동 |
+| `Enter` | 선택 브랜치로 전환 (`git switch`) |
+| `n` | 새 브랜치 생성 후 전환 (`git switch -c`) |
+| `d` | 브랜치 삭제 (병합된 브랜치만, 확인 필요) |
+| `D` | 브랜치 강제 삭제 (미머지 포함, 확인 필요) |
+| `r` | 브랜치 목록 새로고침 |
+| `b` / `Esc` | 패널 닫기 |
+
+### 원격 동기화
+
+push/pull/fetch는 비동기로 실행되며 진행 중 모달이 표시됩니다.
+
+```
+┌─ push 진행 중 ──────────────────────────────────────────────────┐
+│                                                                  │
+│  ⠹  git push --set-upstream origin main                         │
+│                                                                  │
+│  [Esc] 취소                                                      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+| 키 | 동작 |
+|----|------|
+| `p` | `git pull` (현재 브랜치) |
+| `P` | `git push --set-upstream origin <branch>` |
+| `F` | `git fetch --all --prune` |
+| `!` | force push 확인 후 `--force-with-lease` 실행 |
+| `Esc` | 진행 중인 비동기 작업 취소 |
+
+> **참고**: detached HEAD 상태에서는 push/pull을 차단합니다. force push는 `--force-with-lease` 를 사용해 원격 커밋이 예상치 않게 변경된 경우를 감지합니다.
 
 ---
 
@@ -406,7 +462,21 @@ bookmarks = [
 - [x] 줄 이동 (`:숫자`), gg/G 점프
 - [x] 줄바꿈 토글 (`w`)
 
-### v0.3 — Git & File Management 🚧 진행 중
+### v0.4 — Git 브랜치·원격 동기화 ✅ 완료
+
+- [x] **브랜치 관리** (`b`)
+  - [x] 로컬·원격 브랜치 목록 (현재 브랜치 강조)
+  - [x] 브랜치 전환 (`git switch`)
+  - [x] 새 브랜치 생성 (`git switch -c`)
+  - [x] 브랜치 삭제 / 강제 삭제 (확인 모달)
+- [x] **원격 동기화** (`p` / `P` / `F` / `!`)
+  - [x] push (항상 `--set-upstream`, detached 차단)
+  - [x] pull / fetch --all --prune
+  - [x] force push (`--force-with-lease`, 확인 모달)
+  - [x] 비동기 실행 + 진행 모달 + ESC 취소
+- [x] **파일 되돌리기** (`X`, 확인 모달, `git restore`)
+
+### v0.3 — Git & File Management ✅ 완료
 
 - [x] **Git 관리 모드** (`g`)
   - [x] 파일 상태 표시 (staged / unstaged / untracked)

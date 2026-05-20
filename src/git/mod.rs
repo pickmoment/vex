@@ -235,3 +235,141 @@ pub fn get_log(root: &Path) -> Vec<String> {
         .map(|s| s.lines().map(|l| l.to_string()).collect())
         .unwrap_or_default()
 }
+
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    pub name: String,
+    pub hash: String,
+    pub subject: String,
+    pub is_current: bool,
+    pub is_remote: bool,
+}
+
+pub fn list_branches(root: &Path) -> Vec<BranchInfo> {
+    let root_str = root.to_str().unwrap_or("");
+    // %(refname) 전체 경로를 포함해 is_remote를 정확히 판정
+    let out = Command::new("git")
+        .args([
+            "-C", root_str,
+            "for-each-ref",
+            "--format=%(HEAD)|%(refname)|%(refname:short)|%(objectname:short)|%(contents:subject)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+
+    out.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(5, '|');
+            let head = parts.next()?;
+            let refname = parts.next()?;
+            let name = parts.next()?;
+            let hash = parts.next()?;
+            let subject = parts.next().unwrap_or("");
+            // "origin/HEAD -> origin/main" 같은 심볼릭 참조 제외
+            if subject.starts_with("-> ") {
+                return None;
+            }
+            let is_remote = refname.starts_with("refs/remotes/");
+            Some(BranchInfo {
+                name: name.to_string(),
+                hash: hash.to_string(),
+                subject: subject.to_string(),
+                is_current: head.trim() == "*",
+                is_remote,
+            })
+        })
+        .collect()
+}
+
+pub fn switch_branch(root: &Path, name: &str) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["-C", root.to_str().unwrap_or(""), "switch", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+pub fn create_branch(root: &Path, name: &str) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["-C", root.to_str().unwrap_or(""), "switch", "-c", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+pub fn delete_branch(root: &Path, name: &str, force: bool) -> Result<(), String> {
+    let flag = if force { "-D" } else { "-d" };
+    let out = Command::new("git")
+        .args(["-C", root.to_str().unwrap_or(""), "branch", flag, name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+pub fn restore_file(root: &Path, path: &str) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["-C", root.to_str().unwrap_or(""), "restore", "--", path])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+pub fn is_detached(root: &Path) -> bool {
+    let out = Command::new("git")
+        .args(["-C", root.to_str().unwrap_or(""), "symbolic-ref", "-q", "HEAD"])
+        .output();
+    match out {
+        Ok(o) => !o.status.success(),
+        Err(_) => false,
+    }
+}
+
+pub fn push_args(branch: &str, force: bool) -> Vec<String> {
+    let mut args = vec![
+        "push".to_string(),
+        "--set-upstream".to_string(),
+        "origin".to_string(),
+        branch.to_string(),
+    ];
+    if force {
+        args.push("--force-with-lease".to_string());
+    }
+    args
+}
+
+pub fn pull_args() -> &'static [&'static str] {
+    &["pull"]
+}
+
+pub fn fetch_args() -> &'static [&'static str] {
+    &["fetch", "--all", "--prune"]
+}

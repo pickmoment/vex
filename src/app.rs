@@ -5,8 +5,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::Backend, layout::Rect, Terminal};
+use std::io::Read as _;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::fs::ops::FileEntry;
@@ -234,6 +236,9 @@ impl App {
                     _ => {}
                 }
             }
+
+            // 비동기 git 명령 완료 폴링 (push/pull/fetch)
+            self.poll_git_async();
 
             if self.pending_editor_open {
                 self.pending_editor_open = false;
@@ -632,16 +637,304 @@ impl App {
 
     /// Git 관리 모드 키 처리
     fn handle_key_git(&mut self, key: KeyEvent) -> Result<()> {
-        // ORDER MATTERS — do not reorder:
-        // 1) committing input absorbs all keys
+        // ORDER MATTERS — modals absorb keys first.
+        // 1) async progress modal — only Esc (kill child) is meaningful
+        if self.git.async_kind.is_some() { return self.handle_git_async_progress(key); }
+        // 2) confirm yes/no modal
+        if self.git.confirm.is_some() { return self.handle_git_confirm(key); }
+        // 3) branch creation input modal
+        if self.git.branch_input_active { return self.handle_git_branch_input(key); }
+        // 4) commit message input modal
         if self.git.is_committing { return self.handle_git_commit_input(key); }
-        // 2) git-wide common keys ([ ] w f) — early return if handled
+        // 5) branch panel (when open and focused)
+        if self.git.branch_panel_open { return self.handle_git_branch_panel(key); }
+        // 6) git-wide common keys ([ ] w f) — early return if handled
         if self.handle_git_common_keys(key)? { return Ok(()); }
-        // 3) submode dispatch
+        // 7) submode dispatch
         if self.git.diff_fullscreen { return self.handle_git_fullscreen(key); }
         if self.git.log_focused && self.git.log_file_focused { return self.handle_git_log_files(key); }
         if self.git.log_focused { return self.handle_git_log(key); }
         self.handle_git_files(key)
+    }
+
+    fn handle_git_async_progress(&mut self, key: KeyEvent) -> Result<()> {
+        if key.code == KeyCode::Esc {
+            if let Some(mut child) = self.git.async_child.take() {
+                let _ = child.kill();
+            }
+            self.git.async_kind = None;
+            self.git.async_started_at = None;
+            self.set_status_error("취소됨");
+        }
+        Ok(())
+    }
+
+    fn handle_git_confirm(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(kind) = self.git.confirm.take() {
+                    self.execute_confirmed(kind);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.git.confirm = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_confirmed(&mut self, kind: crate::state::ConfirmKind) {
+        use crate::state::ConfirmKind;
+        match kind {
+            ConfirmKind::DeleteBranchSoft(name) => {
+                if let Some(ref status) = self.git.status {
+                    let root = status.root.clone();
+                    match crate::git::delete_branch(&root, &name, false) {
+                        Ok(()) => self.set_status_success(format!("브랜치 삭제됨: {name}")),
+                        Err(e) => self.set_status_error(e),
+                    }
+                    self.git.branches = crate::git::list_branches(&root);
+                    let root2 = root.clone();
+                    self.git.refresh(&root2);
+                } else {
+                    let root = self.current_dir.clone();
+                    self.git.refresh(&root);
+                }
+            }
+            ConfirmKind::DeleteBranchForce(name) => {
+                if let Some(ref status) = self.git.status {
+                    let root = status.root.clone();
+                    match crate::git::delete_branch(&root, &name, true) {
+                        Ok(()) => self.set_status_success(format!("브랜치 강제 삭제됨: {name}")),
+                        Err(e) => self.set_status_error(e),
+                    }
+                    self.git.branches = crate::git::list_branches(&root);
+                    let root2 = root.clone();
+                    self.git.refresh(&root2);
+                } else {
+                    let root = self.current_dir.clone();
+                    self.git.refresh(&root);
+                }
+            }
+            ConfirmKind::CheckoutFile(path) => {
+                if let Some(ref status) = self.git.status {
+                    let root = status.root.clone();
+                    match crate::git::restore_file(&root, &path) {
+                        Ok(()) => self.set_status_success(format!("되돌림: {path}")),
+                        Err(e) => self.set_status_error(e),
+                    }
+                    let root2 = root.clone();
+                    self.git.refresh(&root2);
+                    self.git.load_diff();
+                } else {
+                    let root = self.current_dir.clone();
+                    self.git.refresh(&root);
+                    self.git.load_diff();
+                }
+            }
+            ConfirmKind::ForcePush(branch) => {
+                self.start_git_async(crate::state::AsyncKind::Push { force: true, branch });
+            }
+        }
+    }
+
+    fn handle_git_branch_input(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.git.branch_input_active = false;
+                self.git.branch_input.clear();
+            }
+            KeyCode::Enter => {
+                let name = self.git.branch_input.trim().to_string();
+                if !name.is_empty() {
+                    if let Some(ref status) = self.git.status {
+                        let root = status.root.clone();
+                        match crate::git::create_branch(&root, &name) {
+                            Ok(()) => self.set_status_success(format!("브랜치 생성: {name}")),
+                            Err(e) => self.set_status_error(e),
+                        }
+                        self.git.branches = crate::git::list_branches(&root);
+                        let current = self.git.branches.iter()
+                            .position(|b| b.is_current)
+                            .unwrap_or(0);
+                        self.git.branch_idx = current;
+                        let root2 = root.clone();
+                        self.git.refresh(&root2);
+                    }
+                }
+                self.git.branch_input_active = false;
+                self.git.branch_input.clear();
+            }
+            KeyCode::Backspace => { self.git.branch_input.pop(); }
+            KeyCode::Char(c) => { self.git.branch_input.push(c); }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_git_branch_panel(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('b') | KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                self.git.branch_panel_open = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.git.branch_idx > 0 {
+                    self.git.branch_idx -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.git.branch_idx + 1 < self.git.branches.len() {
+                    self.git.branch_idx += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('o') => {
+                let branches = &self.git.branches;
+                if let Some(branch) = branches.get(self.git.branch_idx) {
+                    if branch.is_current {
+                        return Ok(());
+                    }
+                    let name = branch.name.clone();
+                    if let Some(ref status) = self.git.status {
+                        let root = status.root.clone();
+                        match crate::git::switch_branch(&root, &name) {
+                            Ok(()) => self.set_status_success(format!("전환됨: {name}")),
+                            Err(e) => self.set_status_error(e),
+                        }
+                        self.git.branches = crate::git::list_branches(&root);
+                        let current = self.git.branches.iter()
+                            .position(|b| b.is_current)
+                            .unwrap_or(0);
+                        self.git.branch_idx = current;
+                        let root2 = root.clone();
+                        self.git.refresh(&root2);
+                        self.git.load_diff();
+                    }
+                }
+            }
+            KeyCode::Char('n') => {
+                self.git.branch_input_active = true;
+                self.git.branch_input.clear();
+            }
+            KeyCode::Char('d') => {
+                if let Some(branch) = self.git.branches.get(self.git.branch_idx) {
+                    if !branch.is_current && !branch.is_remote {
+                        let name = branch.name.clone();
+                        self.git.confirm = Some(crate::state::ConfirmKind::DeleteBranchSoft(name));
+                    }
+                }
+            }
+            KeyCode::Char('D') => {
+                if let Some(branch) = self.git.branches.get(self.git.branch_idx) {
+                    if !branch.is_current && !branch.is_remote {
+                        let name = branch.name.clone();
+                        self.git.confirm = Some(crate::state::ConfirmKind::DeleteBranchForce(name));
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(ref status) = self.git.status {
+                    let root = status.root.clone();
+                    self.git.branches = crate::git::list_branches(&root);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn start_git_async(&mut self, kind: crate::state::AsyncKind) {
+        if self.git.async_kind.is_some() {
+            self.set_status_error("이미 실행 중인 명령이 있습니다");
+            return;
+        }
+        let root = match self.git.status.as_ref() {
+            Some(s) => s.root.clone(),
+            None => return,
+        };
+        let root_str = match root.to_str() {
+            Some(s) => s.to_string(),
+            None => return,
+        };
+        let args: Vec<String> = match &kind {
+            crate::state::AsyncKind::Push { force, branch } => {
+                crate::git::push_args(branch, *force)
+            }
+            crate::state::AsyncKind::Pull => {
+                crate::git::pull_args().iter().map(|s| s.to_string()).collect()
+            }
+            crate::state::AsyncKind::Fetch => {
+                crate::git::fetch_args().iter().map(|s| s.to_string()).collect()
+            }
+        };
+        match std::process::Command::new("git")
+            .args(["-C", &root_str])
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => {
+                self.git.async_child = Some(child);
+                self.git.async_kind = Some(kind);
+                self.git.async_started_at = Some(Instant::now());
+                self.git.spinner_tick = 0;
+            }
+            Err(e) => self.set_status_error(format!("실행 실패: {e}")),
+        }
+    }
+
+    pub fn poll_git_async(&mut self) {
+        if self.git.async_kind.is_none() {
+            return;
+        }
+        self.git.spinner_tick = self.git.spinner_tick.wrapping_add(1);
+        let done = match self.git.async_child.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(Some(_status)) => Some(_status),
+                Ok(None) => None,
+                Err(_) => {
+                    self.git.async_child = None;
+                    self.git.async_kind = None;
+                    self.git.async_started_at = None;
+                    self.set_status_error("프로세스 오류");
+                    return;
+                }
+            },
+            None => {
+                self.git.async_kind = None;
+                return;
+            }
+        };
+        if let Some(exit_status) = done {
+            let mut child = self.git.async_child.take().unwrap();
+            let mut err_buf = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                let _ = stderr.read_to_string(&mut err_buf);
+            }
+            let kind = self.git.async_kind.take().unwrap();
+            self.git.async_started_at = None;
+            let label = match &kind {
+                crate::state::AsyncKind::Push { force: true, .. } => "force push",
+                crate::state::AsyncKind::Push { .. } => "push",
+                crate::state::AsyncKind::Pull => "pull",
+                crate::state::AsyncKind::Fetch => "fetch",
+            };
+            if exit_status.success() {
+                self.set_status_success(format!("{label} 완료"));
+            } else {
+                let msg = err_buf.trim().to_string();
+                let short = if msg.len() > 80 { msg[..80].to_string() } else { msg };
+                self.set_status_error(format!("{label} 실패: {short}"));
+            }
+            let root = self.current_dir.clone();
+            self.git.refresh(&root);
+            if let Some(ref status) = self.git.status {
+                let r = status.root.clone();
+                self.git.branches = crate::git::list_branches(&r);
+            }
+            self.git.load_diff();
+        }
     }
 
     fn handle_git_commit_input(&mut self, key: KeyEvent) -> Result<()> {
@@ -945,6 +1238,59 @@ impl App {
             KeyCode::Char('r') => {
                 { let root = self.current_dir.clone(); self.git.refresh(&root); }
                 self.git.load_diff();
+            }
+            KeyCode::Char('b') => {
+                if let Some(ref status) = self.git.status {
+                    let root = status.root.clone();
+                    self.git.branches = crate::git::list_branches(&root);
+                }
+                self.git.branch_idx = self.git.branches.iter()
+                    .position(|b| b.is_current)
+                    .unwrap_or(0);
+                self.git.branch_panel_open = true;
+            }
+            KeyCode::Char('X') => {
+                if self.git.section == crate::app::GitSection::Unstaged {
+                    if let Some(ref status) = self.git.status {
+                        if let Some(file) = status.unstaged.get(self.git.unstaged_idx) {
+                            let path = file.path.clone();
+                            self.git.confirm = Some(crate::state::ConfirmKind::CheckoutFile(path));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('P') => {
+                let branch = self.git.status.as_ref()
+                    .map(|s| s.branch.clone())
+                    .unwrap_or_default();
+                if branch == "HEAD" || branch.is_empty() {
+                    self.set_status_error("detached HEAD: push 불가");
+                } else {
+                    self.start_git_async(crate::state::AsyncKind::Push { force: false, branch });
+                }
+            }
+            KeyCode::Char('!') => {
+                let branch = self.git.status.as_ref()
+                    .map(|s| s.branch.clone())
+                    .unwrap_or_default();
+                if branch == "HEAD" || branch.is_empty() {
+                    self.set_status_error("detached HEAD: push 불가");
+                } else {
+                    self.git.confirm = Some(crate::state::ConfirmKind::ForcePush(branch));
+                }
+            }
+            KeyCode::Char('p') => {
+                let branch = self.git.status.as_ref()
+                    .map(|s| s.branch.clone())
+                    .unwrap_or_default();
+                if branch == "HEAD" || branch.is_empty() {
+                    self.set_status_error("detached HEAD: pull 불가");
+                } else {
+                    self.start_git_async(crate::state::AsyncKind::Pull);
+                }
+            }
+            KeyCode::Char('F') => {
+                self.start_git_async(crate::state::AsyncKind::Fetch);
             }
             KeyCode::PageUp => {
                 let n = self.git.diff_panel_height.max(1);

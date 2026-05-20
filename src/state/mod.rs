@@ -1,2 +1,2 @@
 pub mod git;
-pub use git::GitState;
+pub use git::{AsyncKind, ConfirmKind, GitState};

@@ -1,12 +1,14 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
 use crate::app::{App, GitSection};
+use crate::state::{AsyncKind, ConfirmKind};
+use crate::ui::layout::centered_rect_abs;
 
 pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
@@ -21,6 +23,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
     render_header(f, chunks[0], app);
     render_content(f, chunks[1], app);
     render_footer(f, chunks[2], app);
+
+    // 오버레이 (기본 UI 위에 렌더)
+    if app.git.branch_panel_open { render_branch_panel(f, area, app); }
+    if app.git.branch_input_active { render_branch_input_modal(f, area, app); }
+    if app.git.confirm.is_some() { render_confirm_modal(f, area, app); }
+    if app.git.async_kind.is_some() { render_async_progress_modal(f, area, app); }
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
@@ -474,8 +482,6 @@ fn render_diff_content(
     wrap: bool,
     block: Block,
 ) {
-    use ratatui::widgets::Wrap;
-
     let inner_height = area.height.saturating_sub(2) as usize;
     let h = if wrap { 0 } else { h_scroll as usize };
 
@@ -500,7 +506,6 @@ fn render_diff_content(
 /// diff 전체화면 렌더링
 pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
     app.git.diff_panel_height = area.height.saturating_sub(2);
-    use ratatui::widgets::Wrap;
 
     let (content, v_scroll, file_label) = if !app.git.commit_show.is_empty() {
         let name = app
@@ -546,6 +551,23 @@ pub fn render_diff_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    // 진행 모달/확인 모달/입력 모달은 자체 UI를 가지므로 빈 footer
+    if app.git.async_kind.is_some() || app.git.confirm.is_some() || app.git.branch_input_active {
+        f.render_widget(Paragraph::new(""), area);
+        return;
+    }
+    if app.git.branch_panel_open {
+        let hints = Line::from(vec![
+            hint_span("↑↓", "이동"),
+            hint_span("Enter", "전환"),
+            hint_span("n", "새브랜치"),
+            hint_span("d/D", "삭제"),
+            hint_span("r", "새로고침"),
+            hint_span("b/Esc", "닫기"),
+        ]);
+        f.render_widget(Paragraph::new(hints), area);
+        return;
+    }
     if app.git.is_committing {
         let line = Line::from(vec![
             Span::styled(
@@ -601,6 +623,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             hint_span("a", "스테이지"),
             hint_span("u", "언스테이지"),
             if has_staged { hint_span("c", "커밋") } else { Span::raw("") },
+            hint_span("b", "브랜치"),
+            hint_span("p/P", "pull/push"),
+            hint_span("F", "fetch"),
+            hint_span("!", "force-push"),
+            hint_span("X", "파일되돌리기"),
             hint_span("f", "전체화면"),
             if diff_available { hint_span("[/]", "↔") } else { Span::raw("") },
             if diff_available { wrap_hint } else { Span::raw("") },
@@ -678,4 +705,189 @@ fn get_selected_file_name(app: &App) -> Option<String> {
         GitSection::Staged => status.staged.get(app.git.staged_idx).map(|f| f.path.clone()),
         GitSection::Unstaged => status.unstaged.get(app.git.unstaged_idx).map(|f| f.path.clone()),
     }
+}
+
+fn render_branch_panel(f: &mut Frame, area: Rect, app: &App) {
+    let panel_w = 70u16.min(area.width.saturating_sub(4));
+    let panel_h = 22u16.min(area.height.saturating_sub(4));
+    let panel_area = centered_rect_abs(panel_w, panel_h, area);
+
+    f.render_widget(Clear, panel_area);
+
+    let local_count = app.git.branches.iter().filter(|b| !b.is_remote).count();
+    let remote_count = app.git.branches.iter().filter(|b| b.is_remote).count();
+    let title = format!(" 브랜치 (로컬 {local_count} · 원격 {remote_count}) ");
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(panel_area);
+    f.render_widget(block, panel_area);
+
+    let items: Vec<ListItem> = app.git.branches.iter().map(|b| {
+        let marker = if b.is_current {
+            "▶ *"
+        } else if b.is_remote {
+            "  ◇"
+        } else {
+            "   "
+        };
+        let subject_preview: String = b.subject.chars().take(25).collect();
+        let text = format!("{} {:7} {:<35} {}", marker, b.hash, b.name, subject_preview);
+        let style = if b.is_current {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else if b.is_remote {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        ListItem::new(text).style(style)
+    }).collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.git.branch_idx));
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, inner, &mut state);
+}
+
+fn render_branch_input_modal(f: &mut Frame, area: Rect, app: &App) {
+    let modal_area = centered_rect_abs(52, 5, area);
+    f.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .title(" 새 브랜치 이름 ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+
+    let input_line = Line::from(vec![
+        Span::styled(" > ", Style::default().fg(Color::Green)),
+        Span::styled(app.git.branch_input.clone(), Style::default().fg(Color::White)),
+        Span::styled("█", Style::default().fg(Color::Green)),
+    ]);
+    let hint_line = Line::from(vec![
+        Span::styled("[Enter]", Style::default().fg(Color::Black).bg(Color::Green)),
+        Span::styled(" 생성  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("[Esc]", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::styled(" 취소", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    f.render_widget(Paragraph::new(input_line), chunks[0]);
+    f.render_widget(Paragraph::new(hint_line), chunks[1]);
+}
+
+fn render_confirm_modal(f: &mut Frame, area: Rect, app: &App) {
+    let modal_area = centered_rect_abs(62, 7, area);
+    f.render_widget(Clear, modal_area);
+
+    let (title, msg_lines) = match app.git.confirm.as_ref().unwrap() {
+        ConfirmKind::CheckoutFile(p) => (
+            " 파일 변경 되돌리기 ",
+            vec![
+                "파일 변경을 되돌립니다. 복구 불가.".to_string(),
+                format!("대상: {p}"),
+            ],
+        ),
+        ConfirmKind::DeleteBranchSoft(n) => (
+            " 브랜치 삭제 ",
+            vec![format!("브랜치 '{n}' 삭제 (merged 커밋만 허용)")],
+        ),
+        ConfirmKind::DeleteBranchForce(n) => (
+            " 브랜치 강제 삭제 ",
+            vec![
+                format!("⚠  브랜치 '{n}' 강제 삭제"),
+                "미머지 커밋이 있으면 손실됩니다.".to_string(),
+            ],
+        ),
+        ConfirmKind::ForcePush(b) => (
+            " Force Push ",
+            vec![
+                "⚠  강제 푸시 (--force-with-lease)".to_string(),
+                format!("브랜치: {b}"),
+                "원격 커밋을 덮어쓸 수 있습니다.".to_string(),
+            ],
+        ),
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+
+    let mut lines: Vec<Line> = msg_lines.into_iter()
+        .map(|s| Line::from(Span::styled(format!(" {s}"), Style::default().fg(Color::White))))
+        .collect();
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(vec![
+        Span::styled(" [y] ", Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(" 실행   ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" [n/Esc] ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+        Span::styled(" 취소", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_async_progress_modal(f: &mut Frame, area: Rect, app: &App) {
+    let modal_area = centered_rect_abs(52, 6, area);
+    f.render_widget(Clear, modal_area);
+
+    let label = match app.git.async_kind.as_ref().unwrap() {
+        AsyncKind::Push { force: true, branch } => format!("force push → {branch}"),
+        AsyncKind::Push { branch, .. } => format!("push → {branch}"),
+        AsyncKind::Pull => "pull".to_string(),
+        AsyncKind::Fetch => "fetch --all".to_string(),
+    };
+
+    const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spin = SPIN[(app.git.spinner_tick as usize) % SPIN.len()];
+
+    let elapsed = app.git.async_started_at
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or(0);
+    let elapsed_str = if elapsed >= 5 {
+        format!("  ({elapsed}s)")
+    } else {
+        String::new()
+    };
+
+    let block = Block::default()
+        .title(" git 실행 중 ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+
+    let lines = vec![
+        Line::from(Span::raw("")),
+        Line::from(vec![
+            Span::styled(format!(" {spin} "), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{label}{elapsed_str}"), Style::default().fg(Color::White)),
+        ]),
+        Line::from(Span::raw("")),
+        Line::from(vec![
+            Span::styled(" [Esc] ", Style::default().fg(Color::Black).bg(Color::DarkGray)),
+            Span::styled(" 취소", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    f.render_widget(Paragraph::new(lines), inner);
 }

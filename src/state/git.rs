@@ -1,5 +1,18 @@
 use crate::app::GitSection;
 
+pub enum ConfirmKind {
+    DeleteBranchSoft(String),
+    DeleteBranchForce(String),
+    CheckoutFile(String),
+    ForcePush(String),
+}
+
+pub enum AsyncKind {
+    Push { force: bool, branch: String },
+    Pull,
+    Fetch,
+}
+
 pub struct GitState {
     pub status: Option<crate::git::GitStatus>,
     pub section: GitSection,
@@ -22,6 +35,24 @@ pub struct GitState {
     pub diff_wrap: bool,
     pub diff_fullscreen: bool,
     pub diff_panel_height: u16,
+
+    // 브랜치 패널
+    pub branches: Vec<crate::git::BranchInfo>,
+    pub branch_panel_open: bool,
+    pub branch_idx: usize,
+
+    // 브랜치 생성 입력 모달
+    pub branch_input_active: bool,
+    pub branch_input: String,
+
+    // 위험 명령 확인 모달
+    pub confirm: Option<ConfirmKind>,
+
+    // 비동기 명령 진행
+    pub async_kind: Option<AsyncKind>,
+    pub async_child: Option<std::process::Child>,
+    pub async_started_at: Option<std::time::Instant>,
+    pub spinner_tick: u8,
 }
 
 impl GitState {
@@ -48,6 +79,16 @@ impl GitState {
             diff_wrap: false,
             diff_fullscreen: false,
             diff_panel_height: 0,
+            branches: Vec::new(),
+            branch_panel_open: false,
+            branch_idx: 0,
+            branch_input_active: false,
+            branch_input: String::new(),
+            confirm: None,
+            async_kind: None,
+            async_child: None,
+            async_started_at: None,
+            spinner_tick: 0,
         }
     }
 

@@ -95,6 +95,25 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("Esc/?", "닫기"),
         ],
         AppMode::Git => {
+            if app.git.async_kind.is_some() {
+                return vec![("Esc", "취소")];
+            }
+            if app.git.confirm.is_some() {
+                return vec![("y", "확인"), ("n/Esc", "취소")];
+            }
+            if app.git.branch_input_active {
+                return vec![("Enter", "생성"), ("Esc", "취소"), ("Backspace", "지우기")];
+            }
+            if app.git.branch_panel_open {
+                return vec![
+                    ("↑↓", "이동"),
+                    ("Enter", "전환"),
+                    ("n", "새브랜치"),
+                    ("d/D", "삭제"),
+                    ("r", "새로고침"),
+                    ("b/Esc", "닫기"),
+                ];
+            }
             let section_hint = if app.git.section == GitSection::Staged {
                 ("u", "언스테이지")
             } else {
@@ -104,6 +123,10 @@ fn get_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                 ("↑↓", "이동"),
                 ("Tab", "섹션전환"),
                 section_hint,
+                ("b", "브랜치"),
+                ("p/P", "pull/push"),
+                ("F", "fetch"),
+                ("X", "파일되돌리기"),
                 ("d/Enter", "diff"),
                 ("f", "전체화면"),
                 ("c", "커밋"),
