@@ -3,6 +3,24 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// 드래그 선택 범위에 배경 하이라이트 적용
+pub fn apply_selection_highlight(
+    lines: Vec<Line<'static>>,
+    start_line: usize,
+    end_line: usize,
+) -> Vec<Line<'static>> {
+    let sel_bg = Color::Rgb(50, 70, 130);
+    lines.into_iter().enumerate().map(|(i, line)| {
+        if i < start_line || i > end_line {
+            return line;
+        }
+        let spans: Vec<Span<'static>> = line.spans.into_iter()
+            .map(|s| Span::styled(s.content, s.style.bg(sel_bg)))
+            .collect();
+        Line::from(spans)
+    }).collect()
+}
+
 /// 검색 매칭 줄에 배경 하이라이트 적용
 pub fn apply_search_highlights(
     lines: Vec<Line<'static>>,

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -152,6 +152,12 @@ pub struct App {
     pub viewer_height: u16,
     /// 상태 메시지 (작업 결과 피드백, TTL 만료 시 None)
     pub status: Option<StatusMessage>,
+    /// 마우스 드래그 시작 위치 (column, row)
+    pub drag_start: Option<(u16, u16)>,
+    /// 마우스 드래그 현재 위치 (column, row)
+    pub drag_end: Option<(u16, u16)>,
+    /// 드래그 가능한 컨텐츠 영역 (렌더링 시 갱신)
+    pub drag_content_area: Rect,
 }
 
 impl App {
@@ -202,6 +208,9 @@ impl App {
             file_list_height: 0,
             viewer_height: 0,
             status: None,
+            drag_start: None,
+            drag_end: None,
+            drag_content_area: Rect::default(),
         })
     }
 
@@ -1626,12 +1635,25 @@ impl App {
             MouseEventKind::ScrollDown => {
                 self.preview_scroll = self.preview_scroll.saturating_add(3);
             }
-            MouseEventKind::Down(_) => {
+            MouseEventKind::Down(btn) => {
+                if btn == MouseButton::Left {
+                    let ca = self.drag_content_area;
+                    if ca.width > 0 && ca.height > 0
+                        && mouse.column >= ca.x && mouse.column < ca.x + ca.width
+                        && mouse.row >= ca.y && mouse.row < ca.y + ca.height
+                    {
+                        self.drag_start = Some((mouse.column, mouse.row));
+                        self.drag_end = None;
+                    } else {
+                        self.drag_start = None;
+                        self.drag_end = None;
+                    }
+                }
+                // 즐겨찾기 패널 클릭
                 if let Some(area) = self.bookmarks_area {
                     if mouse.column >= area.x && mouse.column < area.x + area.width
                         && mouse.row >= area.y && mouse.row < area.y + area.height
                     {
-                        // 테두리(1행) 제외
                         let row = mouse.row.saturating_sub(area.y + 1) as usize;
                         if row < self.config.bookmarks.len() {
                             self.bookmark_index = row;
@@ -1640,9 +1662,113 @@ impl App {
                     }
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.drag_start.is_some() {
+                    self.drag_end = Some((mouse.column, mouse.row));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.drag_start.is_some() && self.drag_end.is_some() {
+                    self.copy_drag_selection();
+                } else {
+                    self.drag_start = None;
+                    self.drag_end = None;
+                }
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// 드래그 선택 범위의 텍스트를 클립보드에 복사
+    fn copy_drag_selection(&mut self) {
+        let (start, end) = match (self.drag_start.take(), self.drag_end.take()) {
+            (Some(s), Some(e)) => (s, e),
+            _ => return,
+        };
+        let ca = self.drag_content_area;
+        if ca.height == 0 { return; }
+
+        let start_line = (start.1.saturating_sub(ca.y) as usize) + self.preview_scroll as usize;
+        let end_line = (end.1.saturating_sub(ca.y) as usize) + self.preview_scroll as usize;
+        let (s, e) = if start_line <= end_line { (start_line, end_line) } else { (end_line, start_line) };
+
+        let path = match self.selected_path().cloned() {
+            Some(p) if p.is_file() => p,
+            _ => return,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let selected: String = content.lines()
+            .enumerate()
+            .filter(|(i, _)| *i >= s && *i <= e)
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if selected.is_empty() { return; }
+
+        self.write_to_clipboard(&selected);
+        let count = e - s + 1;
+        self.set_status_success(format!("{count}줄 복사됨"));
+    }
+
+    /// 텍스트를 시스템 클립보드에 기록
+    fn write_to_clipboard(&self, text: &str) {
+        use std::io::Write as _;
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(mut child) = std::process::Command::new("pbcopy")
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let ok = std::process::Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .ok()
+                .and_then(|mut c| {
+                    if let Some(stdin) = c.stdin.as_mut() { let _ = stdin.write_all(text.as_bytes()); }
+                    c.wait().ok()
+                })
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                if let Ok(mut child) = std::process::Command::new("xsel")
+                    .args(["--clipboard", "--input"])
+                    .stdin(Stdio::piped())
+                    .spawn()
+                {
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    let _ = child.wait();
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(mut child) = std::process::Command::new("clip")
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
     }
 
     /// 위로 이동

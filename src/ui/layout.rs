@@ -13,6 +13,8 @@ pub struct AppLayout;
 impl AppLayout {
     /// 메인 렌더링 진입점
     pub fn render(f: &mut Frame, app: &mut App) {
+        // 매 프레임 드래그 영역 초기화 (모드 전환 시 잔존 방지)
+        app.drag_content_area = ratatui::layout::Rect::default();
         match app.mode {
             AppMode::Viewer => {
                 viewer::render_fullscreen(f, f.area(), app);
@@ -80,6 +82,7 @@ impl AppLayout {
         Self::render_bookmarks_panel(f, horizontal[0], app);
         file_list::render(f, horizontal[1], app);
         Self::render_preview_panel(f, horizontal[2], app);
+
 
         // 상태 메시지
         if let Some(ref msg) = app.status {
@@ -280,7 +283,7 @@ impl AppLayout {
     }
 
     /// 미리보기 패널
-    fn render_preview_panel(f: &mut Frame, area: Rect, app: &App) {
+    fn render_preview_panel(f: &mut Frame, area: Rect, app: &mut App) {
         use ratatui::{
             style::{Color, Style},
             widgets::{Block, Borders},
@@ -295,7 +298,29 @@ impl AppLayout {
         if let Some(path) = selected_path {
             if path.is_file() {
                 let file_type = App::detect_file_type(&path);
-                viewer::render_preview_content(f, area, &path, &file_type, app.preview_scroll, 0, app.preview_wrap, block, "", &[], None);
+
+                // 드래그 컨텐츠 영역 기록 (ALL 테두리: 상하좌우 -1)
+                app.drag_content_area = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+
+                let selection = if let (Some(start), Some(end)) = (app.drag_start, app.drag_end) {
+                    let ca = app.drag_content_area;
+                    if ca.height > 0 {
+                        let s = (start.1.saturating_sub(ca.y) as usize) + app.preview_scroll as usize;
+                        let e = (end.1.saturating_sub(ca.y) as usize) + app.preview_scroll as usize;
+                        Some(if s <= e { (s, e) } else { (e, s) })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                viewer::render_preview_content(f, area, &path, &file_type, app.preview_scroll, 0, app.preview_wrap, block, "", &[], None, selection);
                 return;
             }
         }

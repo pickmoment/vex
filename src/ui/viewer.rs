@@ -37,13 +37,38 @@ pub fn render_fullscreen(f: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
         .border_style(Style::default().fg(Color::DarkGray));
+
+    // 드래그 컨텐츠 영역 기록 (LEFT|RIGHT|BOTTOM 테두리: 좌우 -1, 상단 없음, 하단 -1)
+    let content_area = chunks[1];
+    app.drag_content_area = Rect {
+        x: content_area.x + 1,
+        y: content_area.y,
+        width: content_area.width.saturating_sub(2),
+        height: content_area.height.saturating_sub(1),
+    };
+
+    let selection = compute_drag_selection(app);
     let current_match_line = app.viewer_search_matches.get(app.viewer_search_idx).copied();
     render_preview_content(
-        f, chunks[1], &selected_path, &file_type,
+        f, content_area, &selected_path, &file_type,
         app.preview_scroll, app.preview_h_scroll, app.preview_wrap, block,
         &app.viewer_search_query, &app.viewer_search_matches, current_match_line,
+        selection,
     );
     render_status_bar(f, chunks[2], app);
+}
+
+/// 드래그 선택 범위를 절대 줄 번호 쌍으로 변환
+fn compute_drag_selection(app: &App) -> Option<(usize, usize)> {
+    let (start, end) = match (app.drag_start, app.drag_end) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return None,
+    };
+    let area = app.drag_content_area;
+    if area.height == 0 { return None; }
+    let s = (start.1.saturating_sub(area.y) as usize) + app.preview_scroll as usize;
+    let e = (end.1.saturating_sub(area.y) as usize) + app.preview_scroll as usize;
+    Some(if s <= e { (s, e) } else { (e, s) })
 }
 
 /// 뷰어 상단 툴바
@@ -78,6 +103,11 @@ fn render_viewer_toolbar(f: &mut Frame, area: Rect, path: &PathBuf, file_type: &
 
 /// 뷰어 하단 상태바 — 검색/goto 입력 또는 스크롤 정보 표시
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
+    // 복사/작업 결과 상태 메시지
+    if let Some(ref msg) = app.status {
+        crate::ui::status_bar::render(f, area, msg);
+        return;
+    }
     // 검색 입력 모드
     if app.viewer_is_searching {
         let line = Line::from(vec![
@@ -150,18 +180,19 @@ pub fn render_preview_content(
     search_query: &str,
     search_matches: &[usize],
     search_current_line: Option<usize>,
+    selection: Option<(usize, usize)>,
 ) {
     match file_type {
         FileType::Markdown => {
             crate::preview::markdown::render(
                 f, area, path, scroll, h_scroll, wrap, block,
-                search_matches, search_current_line,
+                search_matches, search_current_line, selection,
             );
         }
         FileType::Code(lang) => {
             crate::preview::code::render(
                 f, area, path, lang, scroll, h_scroll, wrap, block,
-                search_matches, search_current_line,
+                search_matches, search_current_line, selection,
             );
         }
         FileType::Csv => {
@@ -173,7 +204,7 @@ pub fn render_preview_content(
         FileType::Text | FileType::Unknown => {
             render_text_file(
                 f, area, path, scroll, h_scroll, wrap, block,
-                search_query, search_matches, search_current_line,
+                search_query, search_matches, search_current_line, selection,
             );
         }
         FileType::Pdf => {
@@ -197,6 +228,7 @@ fn render_text_file(
     search_query: &str,
     search_matches: &[usize],
     search_current_line: Option<usize>,
+    selection: Option<(usize, usize)>,
 ) {
     let content = std::fs::read_to_string(path).unwrap_or_else(|e| format!("[읽기 오류: {e}]"));
     let lines: Vec<Line<'static>> = content
@@ -206,6 +238,11 @@ fn render_text_file(
 
     let lines = if !search_query.is_empty() {
         highlight_text_matches(lines, search_query, search_matches, search_current_line)
+    } else {
+        lines
+    };
+    let lines = if let Some((s, e)) = selection {
+        crate::preview::highlight::apply_selection_highlight(lines, s, e)
     } else {
         lines
     };

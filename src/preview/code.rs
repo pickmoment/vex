@@ -25,6 +25,7 @@ pub fn render(
     block: Block,
     search_matches: &[usize],
     search_current_line: Option<usize>,
+    selection: Option<(usize, usize)>,
 ) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -37,6 +38,11 @@ pub fn render(
 
     let lines = highlight_code(&content, path);
     let lines = crate::preview::highlight::apply_search_highlights(lines, search_matches, search_current_line);
+    let lines = if let Some((s, e)) = selection {
+        crate::preview::highlight::apply_selection_highlight(lines, s, e)
+    } else {
+        lines
+    };
     let h = if wrap { 0 } else { h_scroll };
     let mut para = Paragraph::new(lines).block(block).scroll((scroll, h));
     if wrap {
