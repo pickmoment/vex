@@ -47,6 +47,29 @@ pub fn render(
 
 /// 마크다운 텍스트 → ratatui Line 목록 변환
 pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
+    let (fm_entries, body) = extract_frontmatter(content);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    if !fm_entries.is_empty() {
+        let header = vec!["속성".to_string(), "값".to_string()];
+        let body_rows: Vec<Vec<String>> = fm_entries
+            .into_iter()
+            .map(|(k, v)| vec![k, v])
+            .collect();
+        lines.push(Line::from(Span::styled(
+            "  ─── Frontmatter ".to_string()
+                + &"─".repeat(30),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(render_table_lines(&header, &body_rows));
+        lines.push(Line::from(""));
+    }
+
+    let content = body;
+
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -54,7 +77,6 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
 
     let parser = Parser::new_ext(content, options);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let mut style_stack: Vec<Style> = vec![Style::default()];
     let mut in_code_block = false;
@@ -422,6 +444,91 @@ fn char_width(c: char) -> usize {
     } else {
         1
     }
+}
+
+/// YAML frontmatter 추출 (문서 앞의 --- 블록)
+fn extract_frontmatter(content: &str) -> (Vec<(String, String)>, &str) {
+    let rest = if let Some(r) = content.strip_prefix("---\n") {
+        r
+    } else if let Some(r) = content.strip_prefix("---\r\n") {
+        r
+    } else {
+        return (vec![], content);
+    };
+
+    let Some(close_pos) = rest.find("\n---") else {
+        return (vec![], content);
+    };
+
+    let fm_str = &rest[..close_pos];
+    let after_close = &rest[close_pos + 4..]; // skip "\n---"
+    let remaining = if after_close.starts_with("\r\n") {
+        &after_close[2..]
+    } else if after_close.starts_with('\n') {
+        &after_close[1..]
+    } else {
+        after_close
+    };
+
+    let entries = parse_yaml_simple(fm_str);
+    if entries.is_empty() {
+        return (vec![], content);
+    }
+    (entries, remaining)
+}
+
+/// 간단한 YAML key: value / 리스트 파싱
+fn parse_yaml_simple(yaml: &str) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut current_key: Option<String> = None;
+    let mut list_items: Vec<String> = Vec::new();
+
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if trimmed.starts_with("- ") {
+            list_items.push(trimmed[2..].trim().to_string());
+            continue;
+        }
+
+        // 이전 리스트 항목 플러시
+        if !list_items.is_empty() {
+            if let Some(k) = current_key.take() {
+                entries.push((k, list_items.join(", ")));
+            }
+            list_items.clear();
+        }
+
+        if let Some(colon_pos) = line.find(": ") {
+            let key = line[..colon_pos].trim().to_string();
+            let raw_val = line[colon_pos + 2..].trim();
+            let value = raw_val.trim_matches('"').trim_matches('\'').to_string();
+            if !key.is_empty() {
+                if value.is_empty() {
+                    current_key = Some(key);
+                } else {
+                    entries.push((key, value));
+                    current_key = None;
+                }
+            }
+        } else if let Some(stripped) = trimmed.strip_suffix(':') {
+            current_key = Some(stripped.trim().to_string());
+        }
+    }
+
+    // 마지막 항목 플러시
+    if !list_items.is_empty() {
+        if let Some(k) = current_key {
+            entries.push((k, list_items.join(", ")));
+        }
+    } else if let Some(k) = current_key {
+        entries.push((k, String::new()));
+    }
+
+    entries
 }
 
 /// 제목 레벨별 스타일 반환 (prefix, color, bold)
