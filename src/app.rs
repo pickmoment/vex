@@ -72,6 +72,7 @@ pub enum FileType {
     Image,
     Pdf,
     Csv,
+    Parquet,
     Archive,
     Unknown,
 }
@@ -2129,6 +2130,7 @@ impl App {
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => FileType::Image,
             "pdf" => FileType::Pdf,
             "csv" | "tsv" => FileType::Csv,
+            "parquet" => FileType::Parquet,
             "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => FileType::Archive,
             "rs" => FileType::Code("rust".to_string()),
             "py" => FileType::Code("python".to_string()),

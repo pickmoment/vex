@@ -84,6 +84,7 @@ fn render_viewer_toolbar(f: &mut Frame, area: Rect, path: &PathBuf, file_type: &
         FileType::Image => "[Image] ",
         FileType::Pdf => "[PDF] ",
         FileType::Csv => "[CSV] ",
+        FileType::Parquet => "[Parquet] ",
         FileType::Archive => "[Archive] ",
         FileType::Text => "[Text] ",
         FileType::Unknown => "[File] ",
@@ -197,6 +198,9 @@ pub fn render_preview_content(
         }
         FileType::Csv => {
             crate::preview::csv::render(f, area, path, block);
+        }
+        FileType::Parquet => {
+            crate::preview::parquet::render(f, area, path, block, scroll);
         }
         FileType::Image => {
             crate::preview::image::render(f, area, path, block);

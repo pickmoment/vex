@@ -55,6 +55,7 @@ thiserror = "1"
 # 로깅
 log = "0.4"
 env_logger = "0.11"
+parquet = { version = "58.3.0", default-features = false, features = ["snap", "brotli", "flate2", "flate2-rust_backened", "lz4", "zstd"] }
 
 [profile.release]
 opt-level = 3
