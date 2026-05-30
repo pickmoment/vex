@@ -30,7 +30,12 @@ pub fn render(
         }
     };
 
-    let lines = render_markdown(&content);
+    let max_width = if wrap {
+        Some(area.width.saturating_sub(2) as usize)
+    } else {
+        None
+    };
+    let lines = render_markdown(&content, max_width);
     let lines = crate::preview::highlight::apply_search_highlights(lines, search_matches, search_current_line);
     let lines = if let Some((s, e)) = selection {
         crate::preview::highlight::apply_selection_highlight(lines, s, e)
@@ -46,7 +51,7 @@ pub fn render(
 }
 
 /// 마크다운 텍스트 → ratatui Line 목록 변환
-pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
+pub fn render_markdown(content: &str, max_width: Option<usize>) -> Vec<Line<'static>> {
     let (fm_entries, body) = extract_frontmatter(content);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -64,7 +69,7 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
         )));
-        lines.extend(render_table_lines(&header, &body_rows));
+        lines.extend(render_table_lines(&header, &body_rows, max_width));
         lines.push(Line::from(""));
     }
 
@@ -253,7 +258,7 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
                 }
                 TagEnd::Table => {
                     in_table = false;
-                    let table_lines = render_table_lines(&table_header, &table_body);
+                    let table_lines = render_table_lines(&table_header, &table_body, max_width);
                     lines.extend(table_lines);
                     lines.push(Line::from(""));
                 }
@@ -326,7 +331,7 @@ pub fn render_markdown(content: &str) -> Vec<Line<'static>> {
 }
 
 /// 표 데이터를 박스 드로잉 문자로 렌더링
-fn render_table_lines(header: &[String], body: &[Vec<String>]) -> Vec<Line<'static>> {
+fn render_table_lines(header: &[String], body: &[Vec<String>], max_width: Option<usize>) -> Vec<Line<'static>> {
     let num_cols = header.len().max(body.iter().map(|r| r.len()).max().unwrap_or(0));
     if num_cols == 0 {
         return vec![];
@@ -344,6 +349,14 @@ fn render_table_lines(header: &[String], body: &[Vec<String>]) -> Vec<Line<'stat
         })
         .collect();
 
+    // wrap 모드일 때 화면 너비에 맞게 컬럼 너비 제한
+    // 테이블 총 너비 = 3 ("  │") + num_cols * (col_width + 3 (" cell │"))
+    let col_widths = if let Some(mw) = max_width {
+        constrain_col_widths(&col_widths, mw)
+    } else {
+        col_widths
+    };
+
     let border_style = Style::default().fg(Color::DarkGray);
     let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let cell_style = Style::default().fg(Color::White);
@@ -356,8 +369,8 @@ fn render_table_lines(header: &[String], body: &[Vec<String>]) -> Vec<Line<'stat
         border_style,
     )));
 
-    // │ 헤더 │ 헤더 │
-    lines.push(table_row_line(header, &col_widths, num_cols, header_style, border_style));
+    // │ 헤더 │ 헤더 │ (셀 내용이 길면 여러 줄로 표시)
+    lines.extend(render_multi_line_row(header, &col_widths, num_cols, header_style, border_style));
 
     // ├──────┼──────┤
     lines.push(Line::from(Span::styled(
@@ -367,7 +380,7 @@ fn render_table_lines(header: &[String], body: &[Vec<String>]) -> Vec<Line<'stat
 
     // │ 셀   │ 셀   │
     for row in body {
-        lines.push(table_row_line(row, &col_widths, num_cols, cell_style, border_style));
+        lines.extend(render_multi_line_row(row, &col_widths, num_cols, cell_style, border_style));
     }
 
     // └──────┴──────┘
@@ -403,22 +416,165 @@ fn table_border_bot(col_widths: &[usize]) -> String {
     format!("  └{inner}┘")
 }
 
-fn table_row_line(
+/// 한 행을 렌더링. 셀 내용이 컬럼 너비를 초과하면 여러 줄로 래핑
+fn render_multi_line_row(
     cells: &[String],
     col_widths: &[usize],
     num_cols: usize,
     cell_style: Style,
     border_style: Style,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled("  │".to_string(), border_style));
-    for i in 0..num_cols {
-        let cell = cells.get(i).cloned().unwrap_or_default();
-        let padded = format!(" {}{} ", cell, " ".repeat(col_widths[i].saturating_sub(display_width(&cell))));
-        spans.push(Span::styled(padded, cell_style));
-        spans.push(Span::styled("│".to_string(), border_style));
+) -> Vec<Line<'static>> {
+    let wrapped: Vec<Vec<String>> = (0..num_cols)
+        .map(|i| {
+            let cell = cells.get(i).cloned().unwrap_or_default();
+            wrap_cell(&cell, col_widths[i])
+        })
+        .collect();
+
+    let row_height = wrapped.iter().map(|c| c.len()).max().unwrap_or(1);
+    let mut result = Vec::new();
+
+    for line_idx in 0..row_height {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(Span::styled("  │".to_string(), border_style));
+        for col_idx in 0..num_cols {
+            let content = wrapped[col_idx].get(line_idx).cloned().unwrap_or_default();
+            let padded = format!(
+                " {}{} ",
+                content,
+                " ".repeat(col_widths[col_idx].saturating_sub(display_width(&content)))
+            );
+            spans.push(Span::styled(padded, cell_style));
+            spans.push(Span::styled("│".to_string(), border_style));
+        }
+        result.push(Line::from(spans));
     }
-    Line::from(spans)
+
+    result
+}
+
+/// 셀 텍스트를 max_w 너비 내에서 단어 단위로 줄바꿈
+fn wrap_cell(s: &str, max_w: usize) -> Vec<String> {
+    if max_w == 0 {
+        return vec![String::new()];
+    }
+    if display_width(s) <= max_w {
+        return vec![s.to_string()];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0usize;
+
+    for word in s.split_whitespace() {
+        let word_w = display_width(word);
+        if current_w == 0 {
+            if word_w <= max_w {
+                current.push_str(word);
+                current_w = word_w;
+            } else {
+                // 단어 자체가 컬럼보다 길면 문자 단위로 나눔
+                for part in break_word(word, max_w) {
+                    if display_width(&part) == max_w {
+                        lines.push(part);
+                    } else {
+                        current = part.clone();
+                        current_w = display_width(&part);
+                    }
+                }
+            }
+        } else if current_w + 1 + word_w <= max_w {
+            current.push(' ');
+            current.push_str(word);
+            current_w += 1 + word_w;
+        } else {
+            lines.push(current.clone());
+            current.clear();
+            current_w = 0;
+            if word_w <= max_w {
+                current.push_str(word);
+                current_w = word_w;
+            } else {
+                for part in break_word(word, max_w) {
+                    if display_width(&part) == max_w {
+                        lines.push(part);
+                    } else {
+                        current = part.clone();
+                        current_w = display_width(&part);
+                    }
+                }
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// 단어가 max_w보다 길 때 문자 단위로 분할
+fn break_word(word: &str, max_w: usize) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut w = 0usize;
+    for c in word.chars() {
+        let cw = char_width(c);
+        if w + cw > max_w {
+            if !current.is_empty() {
+                parts.push(current.clone());
+                current.clear();
+                w = 0;
+            }
+        }
+        current.push(c);
+        w += cw;
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// wrap 모드에서 테이블 총 너비가 max_width를 넘지 않도록 컬럼 너비를 비례 축소
+fn constrain_col_widths(col_widths: &[usize], max_width: usize) -> Vec<usize> {
+    let num_cols = col_widths.len();
+    if num_cols == 0 {
+        return vec![];
+    }
+    // 총 너비 = 3 + num_cols * 3 + sum(col_widths)
+    let overhead = 3 + 3 * num_cols;
+    let total: usize = col_widths.iter().sum();
+    if overhead + total <= max_width {
+        return col_widths.to_vec();
+    }
+    let available = max_width.saturating_sub(overhead);
+    if available < num_cols {
+        return vec![1; num_cols];
+    }
+    // 자연 너비 비율로 분배
+    let mut result: Vec<usize> = col_widths.iter()
+        .map(|&w| ((w * available) / total).max(1))
+        .collect();
+    // 정수 나눗셈 오차 보정
+    let used: usize = result.iter().sum();
+    if used < available {
+        for i in 0..(available - used).min(num_cols) {
+            result[i] += 1;
+        }
+    } else if used > available {
+        let mut excess = used - available;
+        for i in (0..num_cols).rev() {
+            if excess == 0 { break; }
+            let reduce = result[i].saturating_sub(1).min(excess);
+            result[i] -= reduce;
+            excess -= reduce;
+        }
+    }
+    result
 }
 
 /// 문자열의 터미널 표시 너비 계산 (CJK 문자는 2칸)
